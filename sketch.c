@@ -200,8 +200,9 @@ void mm_idx_manipulate(/*FILE *fp,*/ mm_idx_t * mi) {
         exit(-1);
     }
 
-    char buf[128];
-    while (fgets(buf, 126, vcf)) {
+    int VCF_READ_BUFFER_SIZE = 128;
+    char buf[VCF_READ_BUFFER_SIZE];
+    while (fgets(buf, VCF_READ_BUFFER_SIZE - 2, vcf)) {
         //printf("%s\n", buf);
         char *token = strtok(buf, "\t");
         char *str[5];
@@ -230,7 +231,8 @@ void mm_idx_manipulate(/*FILE *fp,*/ mm_idx_t * mi) {
                 seq_num = i;
             }
         }
-        uint32_t seq[7];
+        int SEQ_CHUNK_NUMBER = 7;
+        uint32_t seq[SEQ_CHUNK_NUMBER];
         seq[0] = mi->S[(contig_offset + atol(snp_position) - 1) / 8 - 3];
         seq[1] = mi->S[(contig_offset + atol(snp_position) - 1) / 8 - 2];
         seq[2] = mi->S[(contig_offset + atol(snp_position) - 1) / 8 - 1];
@@ -243,7 +245,7 @@ void mm_idx_manipulate(/*FILE *fp,*/ mm_idx_t * mi) {
         //printf("%lu %lu %lu %lu %lu\n", seq[0], seq[1], seq[2], seq[3], seq[4]);
         char original_ref_seq[57];
         original_ref_seq[56] = '\0';
-        for (int i = 0; i < 7; i++) {
+        for (int i = 0; i < SEQ_CHUNK_NUMBER; i++) {
             uint32_t tmp_seq = seq[i];
             for (int j = 0; j < 8; j++) {
                 uint32_t tmp = tmp_seq % 16;
@@ -266,6 +268,8 @@ void mm_idx_manipulate(/*FILE *fp,*/ mm_idx_t * mi) {
                 tmp_seq = tmp_seq / 16;
             }
         }
+        // str[3] - REF
+        // str[4] - ALT
         if (strlen(str[3]) == 1 && strlen(str[4]) == 1) {
             //SNP
             char new_ref_seq[57];
