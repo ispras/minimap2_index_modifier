@@ -155,12 +155,10 @@ void mm_idx_manipulate(/*FILE *fp,*/ mm_idx_t * mi) {
     int VCF_READ_BUFFER_SIZE = 128;
     char buf[VCF_READ_BUFFER_SIZE];
     while (fgets(buf, VCF_READ_BUFFER_SIZE - 2, vcf)) {
-        //printf("%s\n", buf);
         char *token = strtok(buf, "\t");
         char *str[5];
         // Read line
         for (int i = 0; i < 5; i++) {
-            //printf("%s\n", token);
             str[i] = token;
             token = strtok(NULL, "\t");
         }
@@ -183,20 +181,21 @@ void mm_idx_manipulate(/*FILE *fp,*/ mm_idx_t * mi) {
                 seq_num = i;
             }
         }
-        int SEQ_CHUNK_NUMBER = 7;
+
+        int SIDE_SIZE = (mi->k - 1) + mi->w;
+        // Calculate number of chunks:
+        // side chunks: take k-mer size, subtract 1 and add window size
+        // divided by chunk size and multiplied by 2 as it has 2 sides, and one for center
+        int SEQ_CHUNK_NUMBER = SIDE_SIZE / 8 * 2 + 1;
+        // add extra two side chunks if (mi->k - 1 + 10) is not a multiple of 8
+        int EXTRA_GAP = (8 - SIDE_SIZE % 8) % 8;
+        SEQ_CHUNK_NUMBER = (EXTRA_GAP) ? SEQ_CHUNK_NUMBER + 2 : SEQ_CHUNK_NUMBER;
         uint32_t seq[SEQ_CHUNK_NUMBER];
-        seq[0] = mi->S[(contig_offset + atol(snp_position) - 1) / 8 - 3];
-        seq[1] = mi->S[(contig_offset + atol(snp_position) - 1) / 8 - 2];
-        seq[2] = mi->S[(contig_offset + atol(snp_position) - 1) / 8 - 1];
-        seq[3] = mi->S[(contig_offset + atol(snp_position) - 1) / 8];
-        seq[4] = mi->S[(contig_offset + atol(snp_position) - 1) / 8 + 1];
-        seq[5] = mi->S[(contig_offset + atol(snp_position) - 1) / 8 + 2];
-        seq[6] = mi->S[(contig_offset + atol(snp_position) - 1) / 8 + 3];
+        for (int i = 0; i < SEQ_CHUNK_NUMBER; i ++)
+            seq[i] =  mi->S[(contig_offset + atol(snp_position) - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i];
 
-
-        //printf("%lu %lu %lu %lu %lu\n", seq[0], seq[1], seq[2], seq[3], seq[4]);
-        char original_ref_seq[57];
-        original_ref_seq[56] = '\0';
+        char original_ref_seq[SEQ_CHUNK_NUMBER * 8 + 1];
+        original_ref_seq[SEQ_CHUNK_NUMBER * 8] = '\0';
         for (int i = 0; i < SEQ_CHUNK_NUMBER; i++) {
             uint32_t tmp_seq = seq[i];
             for (int j = 0; j < 8; j++) {
@@ -224,24 +223,23 @@ void mm_idx_manipulate(/*FILE *fp,*/ mm_idx_t * mi) {
         // str[4] - ALT
         if (strlen(str[3]) == 1 && strlen(str[4]) == 1) {
             //SNP
-            char new_ref_seq[57];
-            memcpy(new_ref_seq, original_ref_seq, 57);
-            new_ref_seq[24 + (contig_offset + atol(snp_position) - 1) % 8] = snp_to;
+            char new_ref_seq[SEQ_CHUNK_NUMBER * 8 + 1];
+            memcpy(new_ref_seq, original_ref_seq, SEQ_CHUNK_NUMBER * 8 + 1);
+            new_ref_seq[EXTRA_GAP + SIDE_SIZE + (contig_offset + atol(snp_position) - 1) % 8] = snp_to;
 
             //Finds minimizer in window
             mm128_v minimizer_array = {0, 0, 0};
-            mm_sketch(0, &new_ref_seq[(contig_offset + atol(snp_position) - 1) % 8], 49, mi->w, mi->k,
-                      seq_num, mi->flag & MM_I_HPC, &minimizer_array);
+            mm_sketch(0, &new_ref_seq[EXTRA_GAP + (contig_offset + atol(snp_position) - 1) % 8], SIDE_SIZE * 2 + 1, mi->w, mi->k,
+                      0, mi->flag & MM_I_HPC, &minimizer_array);
 
             for (int i = 0; i < minimizer_array.n; i++) {
-                //printf("minimizer_pos\t%ul\t%ul\n", minimizer_array.a[i].x, minimizer_array.a[i].y);
-                if (minimizer_array.a[i].y < 48) continue;
-                if (minimizer_array.a[i].y > 77) continue;
-                minimizer_array.a[i].y = (atol(snp_position) - 25 + minimizer_array.a[i].y / 2) * 2 +
+                if (minimizer_array.a[i].y < SIDE_SIZE * 2) continue;
+                if (minimizer_array.a[i].y > (SIDE_SIZE + mi->k) * 2 - 1) continue;
+                minimizer_array.a[i].y = (seq_num << 32) + (atol(snp_position) - SIDE_SIZE - 1 + minimizer_array.a[i].y / 2) * 2 +
                                          (minimizer_array.a[i].y % 2);
-                mm_idx_push(mi, minimizer_array.a[i].x, minimizer_array.a[i].y/*, fp*/);
+                mm_idx_push(mi, minimizer_array.a[i].x, minimizer_array.a[i].y);
             }
-        } else if (strlen(str[3]) > 1 && strlen(str[4]) == 1) {
+            } else if (strlen(str[3]) > 1 && strlen(str[4]) == 1) {
             //Deletion
             //Gather extra seq
             int ext_chunk_count = (strlen(str[3]) - 2) / 8 + 1;
@@ -274,54 +272,50 @@ void mm_idx_manipulate(/*FILE *fp,*/ mm_idx_t * mi) {
 
             //Create new window
             char * new_ref_seq;
-            new_ref_seq = malloc(sizeof(char) * (57 - strlen(str[3]) + 1 + ext_chunk_count * 8));
-            memcpy(new_ref_seq, original_ref_seq, 24 + (contig_offset + atol(snp_position) - 1) % 8);
-            new_ref_seq[24 + (contig_offset + atol(snp_position) - 1) % 8] = snp_to;
-            new_ref_seq[24 + (contig_offset + atol(snp_position) - 1) % 8 + 1] = '\0';
-            new_ref_seq = strcat(new_ref_seq, &original_ref_seq[24 + (contig_offset + atol(snp_position) - 1) % 8 + strlen(str[3])]);
+            new_ref_seq = malloc(sizeof(char) * (SEQ_CHUNK_NUMBER * 8 + 1 - strlen(str[3]) + 1 + ext_chunk_count * 8));
+            memcpy(new_ref_seq, original_ref_seq, EXTRA_GAP + SIDE_SIZE + (contig_offset + atol(snp_position) - 1) % 8);
+            new_ref_seq[EXTRA_GAP + SIDE_SIZE + (contig_offset + atol(snp_position) - 1) % 8] = snp_to;
+            new_ref_seq[EXTRA_GAP + SIDE_SIZE + (contig_offset + atol(snp_position) - 1) % 8 + 1] = '\0';
+            new_ref_seq = strcat(new_ref_seq, &original_ref_seq[EXTRA_GAP + SIDE_SIZE + (contig_offset + atol(snp_position) - 1) % 8 + strlen(str[3])]);
             new_ref_seq = strcat(new_ref_seq, original_ref_seq_ext);
 
             //Finds minimizer in window
             mm128_v minimizer_array = {0, 0, 0};
-            mm_sketch(0, &new_ref_seq[(contig_offset + atol(snp_position) - 1) % 8], 49, mi->w, mi->k,
-                      seq_num, mi->flag & MM_I_HPC, &minimizer_array);
+            mm_sketch(0, &new_ref_seq[(contig_offset + atol(snp_position) - 1) % 8], SIDE_SIZE * 2 + 1, mi->w, mi->k,
+                      0, mi->flag & MM_I_HPC, &minimizer_array);
 
 
             free(original_ref_seq_ext);
             free(new_ref_seq);
 
             for (int i = 0; i < minimizer_array.n; i++) {
-                //printf("minimizer_pos\t%ul\t%ul\n", minimizer_array.a[i].x, minimizer_array.a[i].y);
-                if (minimizer_array.a[i].y < 50) continue; // TODO change 50 to 48 for similarity with SNPS (it will take extra calculation but no changes)
-                if (minimizer_array.a[i].y > 77) continue;
-                minimizer_array.a[i].y = (atol(snp_position) - 25 + minimizer_array.a[i].y / 2) * 2 +
-                                         (minimizer_array.a[i].y % 2) + (strlen(str[3]) - 1) * 2; // TODO do not add (strlen(str[3]) - 1) * 2
-                mm_idx_push(mi, minimizer_array.a[i].x, minimizer_array.a[i].y/*, fp*/);
+                if (minimizer_array.a[i].y < SIDE_SIZE * 2 + 2) continue; // TODO change 50 to 48 for similarity with SNPS (it will take extra calculation but no changes)
+                if (minimizer_array.a[i].y > (SIDE_SIZE + mi->k) * 2 - 1) continue;
+                minimizer_array.a[i].y = (seq_num << 32) + (atol(snp_position) - SIDE_SIZE - 1 + minimizer_array.a[i].y / 2) * 2 +
+                                         (minimizer_array.a[i].y % 2) + (strlen(str[3]) - 1) * 2;
+                mm_idx_push(mi, minimizer_array.a[i].x, minimizer_array.a[i].y);
             }
         } else if (strlen(str[3]) == 1 && strlen(str[4]) > 1) {
             //Insertion
             //Create new window
             char * new_ref_seq;
-            new_ref_seq = malloc(sizeof(char) * (57 + strlen(str[4]) - 1));
-            memcpy(new_ref_seq, original_ref_seq, 24 + (contig_offset + atol(snp_position) - 1) % 8);
-            new_ref_seq[24 + (contig_offset + atol(snp_position) - 1) % 8] = '\0';
+            new_ref_seq = malloc(sizeof(char) * (SEQ_CHUNK_NUMBER * 8 + 1 + strlen(str[4]) - 1));
+            memcpy(new_ref_seq, original_ref_seq, EXTRA_GAP + SIDE_SIZE + (contig_offset + atol(snp_position) - 1) % 8);
+            new_ref_seq[EXTRA_GAP + SIDE_SIZE + (contig_offset + atol(snp_position) - 1) % 8] = '\0';
             new_ref_seq = strcat(new_ref_seq, str[4]);
-            new_ref_seq = strcat(new_ref_seq, &original_ref_seq[24 + (contig_offset + atol(snp_position) - 1) % 8 + 1]);
+            new_ref_seq = strcat(new_ref_seq, &original_ref_seq[EXTRA_GAP + SIDE_SIZE + (contig_offset + atol(snp_position) - 1) % 8 + 1]);
 
             //Finds minimizer in window
             mm128_v minimizer_array = {0, 0, 0};
-            mm_sketch(0, &new_ref_seq[(contig_offset + atol(snp_position) - 1) % 8], 49 + strlen(str[4]) - 1, mi->w, mi->k,
-                      seq_num, mi->flag & MM_I_HPC, &minimizer_array);
-
-
+            mm_sketch(0, &new_ref_seq[(contig_offset + atol(snp_position) - 1) % 8], SIDE_SIZE * 2 + 1 + strlen(str[4]) - 1, mi->w, mi->k,
+                      0, mi->flag & MM_I_HPC, &minimizer_array);
 
             for (int i = 0; i < minimizer_array.n; i++) {
-                //printf("minimizer_pos\t%ul\t%ul\n", minimizer_array.a[i].x, minimizer_array.a[i].y);
-                if (minimizer_array.a[i].y < 50) continue;
-                if (minimizer_array.a[i].y > 77 + (strlen(str[4]) - 1) * 2) continue;
-                minimizer_array.a[i].y = (atol(snp_position) - 25 + minimizer_array.a[i].y / 2) * 2 +
-                                         (minimizer_array.a[i].y % 2);// + (strlen(str[4]) - 1) * 2;
-                mm_idx_push(mi, minimizer_array.a[i].x, minimizer_array.a[i].y/*, fp*/);
+                if (minimizer_array.a[i].y < SIDE_SIZE * 2 + 2) continue;
+                if (minimizer_array.a[i].y > (SIDE_SIZE + mi->k) * 2 - 1 + (strlen(str[4]) - 1) * 2) continue;
+                minimizer_array.a[i].y = (seq_num << 32) + (atol(snp_position) - SIDE_SIZE - 1 + minimizer_array.a[i].y / 2) * 2 +
+                                         (minimizer_array.a[i].y % 2);
+                mm_idx_push(mi, minimizer_array.a[i].x, minimizer_array.a[i].y);
             }
             free(new_ref_seq);
         } else {
