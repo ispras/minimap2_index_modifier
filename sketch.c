@@ -231,13 +231,13 @@ void mm_idx_manipulate(/*FILE *fp,*/ mm_idx_t * mi) {
             //Finds minimizer in window
             mm128_v minimizer_array = {0, 0, 0};
             mm_sketch(0, &new_ref_seq[(contig_offset + atol(snp_position) - 1) % 8], 49, mi->w, mi->k,
-                      0, mi->flag & MM_I_HPC, &minimizer_array);
+                      seq_num, mi->flag & MM_I_HPC, &minimizer_array);
 
             for (int i = 0; i < minimizer_array.n; i++) {
                 //printf("minimizer_pos\t%ul\t%ul\n", minimizer_array.a[i].x, minimizer_array.a[i].y);
                 if (minimizer_array.a[i].y < 48) continue;
                 if (minimizer_array.a[i].y > 77) continue;
-                minimizer_array.a[i].y = (seq_num << 32) + (atol(snp_position) - 25 + minimizer_array.a[i].y / 2) * 2 +
+                minimizer_array.a[i].y = (atol(snp_position) - 25 + minimizer_array.a[i].y / 2) * 2 +
                                          (minimizer_array.a[i].y % 2);
                 mm_idx_push(mi, minimizer_array.a[i].x, minimizer_array.a[i].y/*, fp*/);
             }
@@ -284,7 +284,7 @@ void mm_idx_manipulate(/*FILE *fp,*/ mm_idx_t * mi) {
             //Finds minimizer in window
             mm128_v minimizer_array = {0, 0, 0};
             mm_sketch(0, &new_ref_seq[(contig_offset + atol(snp_position) - 1) % 8], 49, mi->w, mi->k,
-                      0, mi->flag & MM_I_HPC, &minimizer_array);
+                      seq_num, mi->flag & MM_I_HPC, &minimizer_array);
 
 
             free(original_ref_seq_ext);
@@ -294,7 +294,7 @@ void mm_idx_manipulate(/*FILE *fp,*/ mm_idx_t * mi) {
                 //printf("minimizer_pos\t%ul\t%ul\n", minimizer_array.a[i].x, minimizer_array.a[i].y);
                 if (minimizer_array.a[i].y < 50) continue; // TODO change 50 to 48 for similarity with SNPS (it will take extra calculation but no changes)
                 if (minimizer_array.a[i].y > 77) continue;
-                minimizer_array.a[i].y = (seq_num << 32) + (atol(snp_position) - 25 + minimizer_array.a[i].y / 2) * 2 +
+                minimizer_array.a[i].y = (atol(snp_position) - 25 + minimizer_array.a[i].y / 2) * 2 +
                                          (minimizer_array.a[i].y % 2) + (strlen(str[3]) - 1) * 2; // TODO do not add (strlen(str[3]) - 1) * 2
                 mm_idx_push(mi, minimizer_array.a[i].x, minimizer_array.a[i].y/*, fp*/);
             }
@@ -311,7 +311,7 @@ void mm_idx_manipulate(/*FILE *fp,*/ mm_idx_t * mi) {
             //Finds minimizer in window
             mm128_v minimizer_array = {0, 0, 0};
             mm_sketch(0, &new_ref_seq[(contig_offset + atol(snp_position) - 1) % 8], 49 + strlen(str[4]) - 1, mi->w, mi->k,
-                      0, mi->flag & MM_I_HPC, &minimizer_array);
+                      seq_num, mi->flag & MM_I_HPC, &minimizer_array);
 
 
 
@@ -319,7 +319,7 @@ void mm_idx_manipulate(/*FILE *fp,*/ mm_idx_t * mi) {
                 //printf("minimizer_pos\t%ul\t%ul\n", minimizer_array.a[i].x, minimizer_array.a[i].y);
                 if (minimizer_array.a[i].y < 50) continue;
                 if (minimizer_array.a[i].y > 77 + (strlen(str[4]) - 1) * 2) continue;
-                minimizer_array.a[i].y = (seq_num << 32) + (atol(snp_position) - 25 + minimizer_array.a[i].y / 2) * 2 +
+                minimizer_array.a[i].y = (atol(snp_position) - 25 + minimizer_array.a[i].y / 2) * 2 +
                                          (minimizer_array.a[i].y % 2);// + (strlen(str[4]) - 1) * 2;
                 mm_idx_push(mi, minimizer_array.a[i].x, minimizer_array.a[i].y/*, fp*/);
             }
