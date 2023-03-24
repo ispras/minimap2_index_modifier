@@ -97,7 +97,7 @@ const uint64_t *mm_idx_get(const mm_idx_t *mi, uint64_t minier, int *n)
 	}
 }
 
-void *mm_idx_push(const mm_idx_t *mi, uint64_t minier, uint64_t n/*, FILE *fp*/)
+void *mm_idx_push(const mm_idx_t *mi, uint64_t minier, uint64_t n)
 {
     int mask = (1<<mi->b) - 1;
     khint_t k;

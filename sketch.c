@@ -143,7 +143,7 @@ void mm_sketch(void *km, const char *str, int len, int w, int k, uint32_t rid, i
 }
 
 
-void mm_idx_manipulate(/*FILE *fp,*/ mm_idx_t * mi) {
+void mm_idx_manipulate(mm_idx_t * mi) {
     FILE *vcf;
     vcf = fopen("ispras/test_snp+indel.vcf", "r");
 
@@ -191,8 +191,37 @@ void mm_idx_manipulate(/*FILE *fp,*/ mm_idx_t * mi) {
         int EXTRA_GAP = (8 - SIDE_SIZE % 8) % 8;
         SEQ_CHUNK_NUMBER = (EXTRA_GAP) ? SEQ_CHUNK_NUMBER + 2 : SEQ_CHUNK_NUMBER;
         uint32_t seq[SEQ_CHUNK_NUMBER];
-        for (int i = 0; i < SEQ_CHUNK_NUMBER; i ++)
-            seq[i] =  mi->S[(contig_offset + atol(snp_position) - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i];
+
+        for (int i = 0; i < SEQ_CHUNK_NUMBER; i++) {
+            if (
+                    // Out of bounds
+                    (contig_offset == 0 && (atol(snp_position) - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i < 0) ||
+                    ((contig_offset + atol(snp_position) - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i) * 8 >= contig_offset + mi->seq[seq_num].len ||
+                    ((contig_offset + atol(snp_position) - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i + 1) * 8 <= contig_offset
+                    )
+                seq[i] = 1145324612; // ALL N
+            else {
+                seq[i] = mi->S[(contig_offset + atol(snp_position) - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i];
+                // At left bound
+                if (((contig_offset + atol(snp_position) - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i) * 8 < contig_offset &&
+                    ((contig_offset + atol(snp_position) - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i + 1) * 8 > contig_offset) {
+                    if (contig_offset % 8 == 0)
+                        seq[i] = 1145324612; // ALL N
+                    else {
+                        seq[i] = seq[i] >> (4 * (contig_offset % 8));
+                        for (int j = 0; j < contig_offset % 8; j++)
+                            seq[i] = (seq[i] << 4) + 4;
+                    }
+                }
+                // At right bound
+                if (((contig_offset + atol(snp_position) - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i) * 8 < contig_offset + mi->seq[seq_num].len &&
+                    ((contig_offset + atol(snp_position) - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i + 1) * 8 > contig_offset + mi->seq[seq_num].len) {
+                    seq[i] = seq[i] << (4 * (8 - (contig_offset + mi->seq[seq_num].len) % 8));
+                    for (int j = 0; j < 8 - (contig_offset + mi->seq[seq_num].len) % 8; j++)
+                        seq[i] = (seq[i] >> 4) | 1073741824; // FIRST N
+                }
+            }
+        }
 
         char original_ref_seq[SEQ_CHUNK_NUMBER * 8 + 1];
         original_ref_seq[SEQ_CHUNK_NUMBER * 8] = '\0';
@@ -239,7 +268,7 @@ void mm_idx_manipulate(/*FILE *fp,*/ mm_idx_t * mi) {
                                          (minimizer_array.a[i].y % 2);
                 mm_idx_push(mi, minimizer_array.a[i].x, minimizer_array.a[i].y);
             }
-            } else if (strlen(str[3]) > 1 && strlen(str[4]) == 1) {
+        } else if (strlen(str[3]) > 1 && strlen(str[4]) == 1) {
             //Deletion
             //Gather extra seq
             int ext_chunk_count = (strlen(str[3]) - 2) / 8 + 1;
@@ -247,7 +276,38 @@ void mm_idx_manipulate(/*FILE *fp,*/ mm_idx_t * mi) {
             original_ref_seq_ext = malloc(sizeof(char) * (8 * ext_chunk_count + 1));
             original_ref_seq_ext[8 * ext_chunk_count] = '\0';
             for (int i = 0; i < ext_chunk_count; i++) {
-                uint32_t tmp_seq = mi->S[(contig_offset + atol(snp_position) - 1) / 8 + 3 + i + 1];;
+                uint32_t tmp_seq;
+                for (int i = 0; i < ext_chunk_count; i++) {
+                    if (
+                        // Out of bounds
+                            (contig_offset == 0 && (atol(snp_position) - 1) / 8 + (SEQ_CHUNK_NUMBER / 2) + i + 1 < 0) ||
+                            ((contig_offset + atol(snp_position) - 1) / 8 + (SEQ_CHUNK_NUMBER / 2) + i + 1) * 8 >= contig_offset + mi->seq[seq_num].len ||
+                            ((contig_offset + atol(snp_position) - 1) / 8 + (SEQ_CHUNK_NUMBER / 2) + i + 2) * 8 <= contig_offset
+                            )
+                        tmp_seq = 1145324612; // ALL N
+                    else {
+                        tmp_seq = mi->S[(contig_offset + atol(snp_position) - 1) / 8 + (SEQ_CHUNK_NUMBER / 2) + i + 1];
+                        // At left bound
+                        if (((contig_offset + atol(snp_position) - 1) / 8 + (SEQ_CHUNK_NUMBER / 2) + i + 1) * 8 < contig_offset &&
+                            ((contig_offset + atol(snp_position) - 1) / 8 + (SEQ_CHUNK_NUMBER / 2) + i + 2) * 8 > contig_offset) {
+                            if (contig_offset % 8 == 0)
+                                tmp_seq = 1145324612; // ALL N
+                            else {
+                                tmp_seq = tmp_seq >> (4 * (contig_offset % 8));
+                                for (int j = 0; j < contig_offset % 8; j++)
+                                    tmp_seq = (tmp_seq << 4) + 4;
+                            }
+                        }
+                        // At right bound
+                        if (((contig_offset + atol(snp_position) - 1) / 8 + (SEQ_CHUNK_NUMBER / 2) + i + 1) * 8 < contig_offset + mi->seq[seq_num].len &&
+                            ((contig_offset + atol(snp_position) - 1) / 8 + (SEQ_CHUNK_NUMBER / 2) + i + 2) * 8 > contig_offset + mi->seq[seq_num].len) {
+                            tmp_seq = tmp_seq << (4 * (8 - (contig_offset + mi->seq[seq_num].len) % 8));
+                            for (int j = 0; j < 8 - (contig_offset + mi->seq[seq_num].len) % 8; j++)
+                                tmp_seq = (tmp_seq >> 4) | 1073741824; // FIRST N
+                        }
+                    }
+                }
+
                 for (int j = 0; j < 8; j++) {
                     uint32_t tmp = tmp_seq % 16;
                     switch (tmp) {
