@@ -791,7 +791,7 @@ void mm_idx_reader_close(mm_idx_reader_t *r)
 	free(r);
 }
 
-mm_idx_t *mm_idx_reader_read(mm_idx_reader_t *r, int n_threads)
+mm_idx_t *mm_idx_reader_read(mm_idx_reader_t *r, int n_threads, char *modified_index_file, char *vcf_with_variants)
 {
 	mm_idx_t *mi;
 	if (r->is_idx) {
@@ -804,30 +804,33 @@ mm_idx_t *mm_idx_reader_read(mm_idx_reader_t *r, int n_threads)
 		if (r->fp_out) {
 			mm_idx_dump(r->fp_out, mi);
 
-			FILE *file1;
-    		file1 = fopen("ispras/idx.txt", "w");
-			mm_idx_to_txt(file1, mi);
-		    fclose(file1);
+//			FILE *file1;
+//			file1 = fopen("test/test_idx.txt", "w");
+//			mm_idx_to_txt(file1, mi);
+//			fclose(file1);
 
 
-			FILE *file2;
-    		file2 = fopen("ispras/idx.txt", "r");
-			mm_idx_t * new_mi = mm_idx_load_from_txt(file2);
-			fclose(file2);
+//			FILE *file2;
+//			file2 = fopen("test/test_idx.txt", "r");
+//			mm_idx_t * new_mi = mm_idx_load_from_txt(file2);
+//			fclose(file2);
 
-            //FILE *file5;
-            //file5 = fopen("ispras/new_minimizers.txt", "w");
-            mm_idx_manipulate(/*file5, */new_mi);
-            //fclose(file5);
+//			FILE *file5;
+//			file5 = fopen("test/new_minimizers.txt", "w");
+//			mm_idx_manipulate(/*file5, */new_mi);
+			mm_idx_manipulate(mi, vcf_with_variants);
+//			fclose(file5);
 
-			FILE *file4;
-    		file4 = fopen("ispras/idx2.txt", "w");
-			mm_idx_to_txt(file4, new_mi);
-		    fclose(file4);
+//			FILE *file4;
+//			file4 = fopen("test/test_idx2.txt", "w");
+//			mm_idx_to_txt(file4, new_mi);
+//			fclose(file4);
 
 			FILE *file3;
-    		file3 = fopen("ispras/idx.mni", "wb");
-			mm_idx_dump(file3, new_mi);
+//			file3 = fopen("test/test.modified2.mni", "wb");
+			file3 = fopen(modified_index_file, "wb");
+//			mm_idx_dump(file3, new_mi);
+			mm_idx_dump(file3, mi);
 			fclose(file3);
 		}
 		mi->index = r->n_parts++;

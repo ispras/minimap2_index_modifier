@@ -143,9 +143,9 @@ void mm_sketch(void *km, const char *str, int len, int w, int k, uint32_t rid, i
 }
 
 
-void mm_idx_manipulate(mm_idx_t * mi) {
+void mm_idx_manipulate(mm_idx_t * mi, char *vcf_with_variants) {
     FILE *vcf;
-    vcf = fopen("ispras/test_snp+indel.vcf", "r");
+    vcf = fopen(vcf_with_variants, "r");
 
     if(vcf == NULL) {
         perror("Error in opening VCF file");
