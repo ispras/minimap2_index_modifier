@@ -6,6 +6,13 @@
 #include "kvec.h"
 #include "mmpriv.h"
 
+#include "linked_vcf_list.h"
+
+#include <htslib/hts.h>
+#include <htslib/vcf.h>
+#include <htslib/kstring.h>
+#include <htslib/kseq.h>
+
 unsigned char seq_nt4_table[256] = {
 	0, 1, 2, 3,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
 	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
@@ -142,8 +149,52 @@ void mm_sketch(void *km, const char *str, int len, int w, int k, uint32_t rid, i
 		kv_push(mm128_t, km, *p, min);
 }
 
+void read_vcf(char *fname)
+{
+	//open vcf file
+    htsFile *fp    = hts_open(fname,"rb");
+
+    //read header
+    bcf_hdr_t *hdr = bcf_hdr_read(fp);
+
+    bcf1_t *rec    = bcf_init();
+
+    char chr_name[11];
+
+    //save for each vcf record
+    while ( bcf_read(fp, hdr, rec)>=0 )
+    {
+    	//unpack for read REF,ALT,INFO,etc
+        bcf_unpack(rec, BCF_UN_STR);
+        bcf_unpack(rec, BCF_UN_INFO);
+
+        if(bcf_is_snp(rec)) {
+            bcf1_t *rec_tmp    = bcf_init();
+            bcf_copy(rec_tmp, rec);
+            insertatbegin((unsigned long)rec->pos, rec_tmp, rec->rid, rec->d.allele[0], rec->d.allele[1]);
+        }
+
+    }
+
+    //printGTList(hdr);
+    hadleGTList(hdr, 40, 10);
+
+    bcf_hdr_destroy(hdr);
+    int ret;
+    if ( (ret=hts_close(fp)) )
+    {
+        fprintf(stderr,"hts_close(%s): non-zero status %d\n",fname,ret);
+        exit(ret);
+    }
+}
+
+
 
 void mm_idx_manipulate(mm_idx_t * mi, char *vcf_with_variants) {
+    read_vcf(vcf_with_variants);
+
+    return;
+
     FILE *vcf;
     vcf = fopen(vcf_with_variants, "r");
 

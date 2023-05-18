@@ -6,7 +6,7 @@ OBJS=		kthread.o kalloc.o misc.o bseq.o sketch.o sdust.o options.o index.o \
 			ksw2_ll_sse.o
 PROG=		minimap2
 PROG_EXTRA=	sdust minimap2-lite
-LIBS=		-lm -lz -lpthread
+LIBS=		-lm -lz -lpthread -lhts
 
 ifeq ($(arm_neon),) # if arm_neon is not defined
 ifeq ($(sse2only),) # if sse2only is not defined
@@ -53,7 +53,7 @@ minimap2-lite:example.o libminimap2.a
 libminimap2.a:$(OBJS)
 		$(AR) -csru $@ $(OBJS)
 
-sdust:sdust.c kalloc.o kalloc.h kdq.h kvec.h kseq.h ketopt.h sdust.h
+sdust:sdust.c kalloc.o kalloc.h kdq.h kvec.h kseq.h ketopt.h sdust.h linked_vcf_list.h
 		$(CC) -D_SDUST_MAIN $(CFLAGS) $< kalloc.o -o $@ -lz
 
 # SSE-specific targets on x86/x86_64
@@ -128,5 +128,5 @@ options.o: mmpriv.h minimap.h bseq.h kseq.h
 pe.o: mmpriv.h minimap.h bseq.h kseq.h kvec.h kalloc.h ksort.h
 sdust.o: kalloc.h kdq.h kvec.h sdust.h
 seed.o: mmpriv.h minimap.h bseq.h kseq.h kalloc.h ksort.h
-sketch.o: kvec.h kalloc.h mmpriv.h minimap.h bseq.h kseq.h
+sketch.o: kvec.h kalloc.h mmpriv.h minimap.h bseq.h kseq.h linked_vcf_list.h
 splitidx.o: mmpriv.h minimap.h bseq.h kseq.h
