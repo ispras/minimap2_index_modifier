@@ -1,4 +1,5 @@
 ## Build
+install htslib 1.17
 make
 
 

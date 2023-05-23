@@ -149,7 +149,7 @@ void mm_sketch(void *km, const char *str, int len, int w, int k, uint32_t rid, i
 		kv_push(mm128_t, km, *p, min);
 }
 
-void read_vcf(char *fname)
+void read_vcf(mm_idx_t * mi, char *fname)
 {
 	//open vcf file
     htsFile *fp    = hts_open(fname,"rb");
@@ -159,7 +159,10 @@ void read_vcf(char *fname)
 
     bcf1_t *rec    = bcf_init();
 
-    char chr_name[11];
+    int chr_id = -1;
+
+    int window = 20;
+    int window_shift = 10;
 
     //save for each vcf record
     while ( bcf_read(fp, hdr, rec)>=0 )
@@ -168,16 +171,36 @@ void read_vcf(char *fname)
         bcf_unpack(rec, BCF_UN_STR);
         bcf_unpack(rec, BCF_UN_INFO);
 
-        if(bcf_is_snp(rec)) {
-            bcf1_t *rec_tmp    = bcf_init();
-            bcf_copy(rec_tmp, rec);
-            insertatbegin((unsigned long)rec->pos, rec_tmp, rec->rid, rec->d.allele[0], rec->d.allele[1]);
-        }
 
+        if(bcf_is_snp(rec)) {
+            bcf1_t *rec_tmp = bcf_dup(rec);
+
+            //delete
+            int new_chr_id = rec_tmp->rid;
+            if (new_chr_id != chr_id) {
+                chr_id = new_chr_id;
+                if(!isListEmpty()){
+                    printf("CHR = %s;\n", bcf_hdr_id2name(hdr, chr_id));
+                    hadleGTList(mi, hdr, window, window_shift);
+                    deleteList();
+                }
+            }
+
+            char * REF = calloc(10, sizeof(char));
+            strcpy(REF, rec->d.allele[0]);
+            char * ALT = calloc(10, sizeof(char));
+            strcpy(ALT, rec->d.allele[1]);
+
+            insertatbegin((unsigned long)rec_tmp->pos, rec_tmp, rec_tmp->rid, REF, ALT);
+        }
+        bcf_empty(rec);
     }
 
-    //printGTList(hdr);
-    hadleGTList(hdr, 40, 10);
+    hadleGTList(mi, hdr, window, window_shift);
+    printf("CHR = %s;\n", bcf_hdr_id2name(hdr, chr_id));
+
+    deleteList();
+    printf("\nWELL DONE\n\n");
 
     bcf_hdr_destroy(hdr);
     int ret;
@@ -188,13 +211,163 @@ void read_vcf(char *fname)
     }
 }
 
+void mm_idx_manipulate_phased(mm_idx_t * mi, char *vcf_with_variants) {
+    read_vcf(mi, vcf_with_variants);
+}
+
+//Array format:
+//REF_arr char array - REF (for control)
+//ALT_arr char array - ALT
+//POS_all ulong array - positions
+//CHR - chromosome
+//N_SNP - length
+void add_variants(mm_idx_t * mi, char * CHR, char ** REF_arr, char ** ALT_arr, char ** POS_all, int N_SNP)
+{
+    // for (int i = N_SNP -1; i >= 0; i--){
+    //     printf("CHR=%s REF=%s ALT=%s POS=%ul \n", CHR, REF_arr[i], ALT_arr[i], POS_all[i]);
+    // }
+
+    if (N_SNP == 0)
+        return;
+
+    const char *snp_contig_name = CHR;
+    const unsigned long snp_position = POS_all[N_SNP -1];
+    // Should be used for testing
+    const char * snp_from = REF_arr[N_SNP -1];
+    // WARNING! str[4][0] because of \n as str[4][1]
+    const char * snp_to = ALT_arr[N_SNP -1];
+
+    //printf("CHR=%s REF=%s ALT=%s POS=%ul \n", snp_contig_name, snp_from, snp_to, snp_position);
+
+    // //Find seq
+    // uint64_t contig_offset;
+    // uint64_t seq_num;
+    // for (int i = 0; i < mi->n_seq; i++) {
+    //     if (strcmp(snp_contig_name, mi->seq[i].name) == 0) {
+    //         contig_offset = mi->seq[i].offset;
+    //         seq_num = i;
+    //     }
+    // }
+
+    // int SIDE_SIZE = (mi->k - 1) + mi->w;
+    // // Calculate number of chunks:
+    // // side chunks: take k-mer size, subtract 1 and add window size
+    // // divided by chunk size and multiplied by 2 as it has 2 sides, and one for center
+    // int SEQ_CHUNK_NUMBER = SIDE_SIZE / 8 * 2 + 1;
+    // // add extra two side chunks if (mi->k - 1 + 10) is not a multiple of 8
+    // int EXTRA_GAP = (8 - SIDE_SIZE % 8) % 8;
+    // SEQ_CHUNK_NUMBER = (EXTRA_GAP) ? SEQ_CHUNK_NUMBER + 2 : SEQ_CHUNK_NUMBER;
+    // uint32_t seq[SEQ_CHUNK_NUMBER];
+    // // printf("SNPPOS=%ul\n",snp_position );
+    // // printf("SNPPOS=%ul\n",contig_offset );
+    // // printf("CHUNKS=%ul\n",SEQ_CHUNK_NUMBER );
+
+    // for (int i = 0; i < SEQ_CHUNK_NUMBER; i++) {
+    //     if (
+    //             // Out of bounds
+    //             (contig_offset == 0 && (snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i < 0) ||
+    //             ((contig_offset + snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i) * 8 >= contig_offset + mi->seq[seq_num].len ||
+    //             ((contig_offset + snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i + 1) * 8 <= contig_offset
+    //             )
+    //         seq[i] = 1145324612; // ALL N
+    //     else {
+    //         seq[i] = mi->S[(contig_offset + snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i];
+    //         // At left bound
+    //         if (((contig_offset + snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i) * 8 < contig_offset &&
+    //             ((contig_offset + snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i + 1) * 8 > contig_offset) {
+    //             if (contig_offset % 8 == 0)
+    //                 seq[i] = 1145324612; // ALL N
+    //             else {
+    //                 seq[i] = seq[i] >> (4 * (contig_offset % 8));
+    //                 for (int j = 0; j < contig_offset % 8; j++)
+    //                     seq[i] = (seq[i] << 4) + 4;
+    //             }
+    //         }
+    //         // At right bound
+    //         if (((contig_offset + snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i) * 8 < contig_offset + mi->seq[seq_num].len &&
+    //             ((contig_offset + snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i + 1) * 8 > contig_offset + mi->seq[seq_num].len) {
+    //             seq[i] = seq[i] << (4 * (8 - (contig_offset + mi->seq[seq_num].len) % 8));
+    //             for (int j = 0; j < 8 - (contig_offset + mi->seq[seq_num].len) % 8; j++)
+    //                 seq[i] = (seq[i] >> 4) | 1073741824; // FIRST N
+    //         }
+    //     }
+    // }
+
+    // char original_ref_seq[SEQ_CHUNK_NUMBER * 8 + 1];
+    // original_ref_seq[SEQ_CHUNK_NUMBER * 8] = '\0';
+    // for (int i = 0; i < SEQ_CHUNK_NUMBER; i++) {
+    //     uint32_t tmp_seq = seq[i];
+    //     for (int j = 0; j < 8; j++) {
+    //         uint32_t tmp = tmp_seq % 16;
+    //         switch (tmp) {
+    //             case 0:
+    //                 original_ref_seq[i * 8 + j] = 'A';
+    //                 break;
+    //             case 1:
+    //                 original_ref_seq[i * 8 + j] = 'C';
+    //                 break;
+    //             case 2:
+    //                 original_ref_seq[i * 8 + j] = 'G';
+    //                 break;
+    //             case 3:
+    //                 original_ref_seq[i * 8 + j] = 'T';
+    //                 break;
+    //             case 4:
+    //                 original_ref_seq[i * 8 + j] = 'N';
+    //         }
+    //         tmp_seq = tmp_seq / 16;
+    //     }
+    // }
+
+    // if (N_SNP == 1) {
+    //     //Single SNP
+    //     char new_ref_seq[SEQ_CHUNK_NUMBER * 8 + 1];
+    //     memcpy(new_ref_seq, original_ref_seq, SEQ_CHUNK_NUMBER * 8 + 1);
+    //     new_ref_seq[EXTRA_GAP + SIDE_SIZE + (contig_offset + snp_position - 1) % 8] = snp_to;
+
+    //     //Finds minimizer in window
+    //     mm128_v minimizer_array = {0, 0, 0};
+    //     mm_sketch(0, &new_ref_seq[EXTRA_GAP + (contig_offset + snp_position - 1) % 8], SIDE_SIZE * 2 + 1, mi->w, mi->k,
+    //                 0, mi->flag & MM_I_HPC, &minimizer_array);
+
+    //     for (int i = 0; i < minimizer_array.n; i++) {
+    //         if (minimizer_array.a[i].y < SIDE_SIZE * 2) continue;
+    //         if (minimizer_array.a[i].y > (SIDE_SIZE + mi->k) * 2 - 1) continue;
+    //         minimizer_array.a[i].y = (seq_num << 32) + (snp_position - SIDE_SIZE - 1 + minimizer_array.a[i].y / 2) * 2 +
+    //                                     (minimizer_array.a[i].y % 2);
+    //         mm_idx_push(mi, minimizer_array.a[i].x, minimizer_array.a[i].y);
+    //     }
+    // }
+    // else {
+    //     //SNP group
+    //     for (int i = N_SNP - 2; i >= 0; i--){
+    //         //REST SNPs
+
+    //     }
+
+    //     char new_ref_seq[SEQ_CHUNK_NUMBER * 8 + 1];
+    //     memcpy(new_ref_seq, original_ref_seq, SEQ_CHUNK_NUMBER * 8 + 1);
+    //     new_ref_seq[EXTRA_GAP + SIDE_SIZE + (contig_offset + snp_position - 1) % 8] = snp_to;
+
+    //     //Finds minimizer in window
+    //     mm128_v minimizer_array = {0, 0, 0};
+    //     mm_sketch(0, &new_ref_seq[EXTRA_GAP + (contig_offset + snp_position - 1) % 8], SIDE_SIZE * 2 + 1, mi->w, mi->k,
+    //                 0, mi->flag & MM_I_HPC, &minimizer_array);
+
+    //     for (int i = 0; i < minimizer_array.n; i++) {
+    //         if (minimizer_array.a[i].y < SIDE_SIZE * 2) continue;
+    //         if (minimizer_array.a[i].y > (SIDE_SIZE + mi->k) * 2 - 1) continue;
+    //         minimizer_array.a[i].y = (seq_num << 32) + (snp_position - SIDE_SIZE - 1 + minimizer_array.a[i].y / 2) * 2 +
+    //                                     (minimizer_array.a[i].y % 2);
+    //         mm_idx_push(mi, minimizer_array.a[i].x, minimizer_array.a[i].y);
+    //     }
+    // }
+
+    //printf("\n");
+}
 
 
 void mm_idx_manipulate(mm_idx_t * mi, char *vcf_with_variants) {
-    read_vcf(vcf_with_variants);
-
-    return;
-
     FILE *vcf;
     vcf = fopen(vcf_with_variants, "r");
 

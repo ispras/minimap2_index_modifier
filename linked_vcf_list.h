@@ -15,8 +15,11 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdbool.h>
 
 #include <htslib/vcf.h>
+#include "mmpriv.h"
+#include "minimap.h"
 
 struct node {
    unsigned long pos;
@@ -70,7 +73,16 @@ void printGTList(bcf_hdr_t *hdr){
    }
 }
 
-void calculate_haplotypes(bcf_hdr_t *hdr, struct node *window_start_pointer, struct node *current_pointer){
+int ifexists(char* z[], int u, char* v)
+{
+    int i;
+    for (i=0; i<u;i++)
+        if (!strcmp(z[i],v)) return (1);
+    return (0);
+}
+
+
+void calculate_haplotypes(mm_idx_t * mi, bcf_hdr_t *hdr, struct node *window_start_pointer, struct node *current_pointer){
    //Even though vcf uses 1-based indexing (i.e. first base is base 1), htslib internally uses 0-based indexing (i.e. bcf1_t::pos is 0 based).
    //http://wresch.github.io/2014/11/18/process-vcf-file-with-htslib.html
    //so we need use (pos + 1)
@@ -78,9 +90,10 @@ void calculate_haplotypes(bcf_hdr_t *hdr, struct node *window_start_pointer, str
    struct node *w_start_pointer = window_start_pointer;
 
 
-
-   char gt_array[10000][40];
-   memset(gt_array, 0, 40*10000);
+   int MAX_SNP = 40;
+   int MAX_HAPLOTYPES = 10000;
+   char gt_array[MAX_HAPLOTYPES][MAX_SNP];
+   memset(gt_array,'\0', MAX_HAPLOTYPES*MAX_SNP*sizeof(char));
    int sample_num = bcf_hdr_nsamples(hdr);
    int snp_num = 0;
 
@@ -98,7 +111,7 @@ void calculate_haplotypes(bcf_hdr_t *hdr, struct node *window_start_pointer, str
             gt_array[i*max_ploidy][snp_num] = bcf_gt_allele(ptr[0]) + '0';
             gt_array[i*max_ploidy+1][snp_num] = bcf_gt_allele(ptr[1]) + '0';
          }
-         //free(gt_arr);
+         free(gt_arr);
       }
 
       //printf("%d ", w_start_pointer->pos+1);
@@ -108,14 +121,71 @@ void calculate_haplotypes(bcf_hdr_t *hdr, struct node *window_start_pointer, str
 
    //printf("\n");
 
+
+   char * tmp_array [MAX_HAPLOTYPES];
+
    //remove non unique strings
-   for(int i = 1; i<10000; i++) {
-      for(int j = 0; j < i; j++) {
-         if(!strcmp(gt_array[i], gt_array[j])) {
-            strcpy(gt_array[i], "\0");
-         }
+   //https://subscription.packtpub.com/book/programming/9781838641108/1/ch01lvl1sec06/finding-the-unique-elements-in-an-array
+   tmp_array[0]=gt_array[0];
+   int k=1;
+   int i;
+   for (i = 1;i < sample_num*2;i++)
+   {
+      if(!ifexists(tmp_array,k,gt_array[i]))
+      {
+         tmp_array[k]=gt_array[i];
+         k++;
       }
    }
+
+   //prepare SNP combinations
+   //Array format:
+   //REF_arr char array - REF (for control)
+   //ALT_arr char array - ALT
+   //POS_all ulong array - positions
+   //CHR - chromosome
+   //N_SNP - length
+   char * CHR = bcf_hdr_id2name(hdr, window_start_pointer->CHR_ID);
+
+   for(int i = 0; i<k; i++) {
+      //printf("%s\n", tmp_array[i]);
+      struct node *local_c_pointer = current_pointer;
+      struct node *local_w_start_pointer = window_start_pointer;
+      int N_SNP = 0;
+      int local_snp_num = 0;
+
+      char * REF_arr[MAX_SNP];
+      char * ALT_arr[MAX_SNP];
+      unsigned long * POS_all[MAX_SNP];
+
+      while (local_w_start_pointer != local_c_pointer) {
+
+
+         if(tmp_array[i][local_snp_num] == '1') {
+            //printf("CHR=%s ALT=%s POS=%d ", bcf_hdr_id2name(hdr, local_w_start_pointer->CHR_ID), local_w_start_pointer->ALT, local_w_start_pointer->pos + 1);
+            REF_arr[N_SNP] = local_w_start_pointer->REF;
+            ALT_arr[N_SNP] = local_w_start_pointer->ALT;
+            POS_all[N_SNP] = (unsigned long)(local_w_start_pointer->pos + 1);
+            N_SNP += 1;
+         }
+
+         local_snp_num += 1;
+         local_w_start_pointer = local_w_start_pointer->next;
+      }
+      if (N_SNP > 0) {
+         add_variants(mi, CHR, REF_arr, ALT_arr, POS_all, N_SNP);
+         //printf("-\n");
+      }
+   }
+
+   //printf("==============\n");
+
+   //print all SNP combinations
+   // for(int i = 0; i<10000; i++) {
+   //    if(strcmp(gt_array[i], "\0")) {
+   //       printf("%s\n", gt_array[i]);
+   //    }
+   // }
 
    //print all SNP combinations
    // for(int i = 0; i<10000; i++) {
@@ -143,7 +213,7 @@ void calculate_haplotypes(bcf_hdr_t *hdr, struct node *window_start_pointer, str
    return;
 }
 
-void hadleGTList(bcf_hdr_t *hdr, int window, int window_shift){
+void hadleGTList(mm_idx_t * mi, bcf_hdr_t *hdr, int window, int window_shift){
    struct node *current_pointer = head;
    struct node *window_start_pointer = head;
 
@@ -158,17 +228,21 @@ void hadleGTList(bcf_hdr_t *hdr, int window, int window_shift){
       current_pointer = current_pointer->next;
 
       if(window_chr_id_start != current_pointer->CHR_ID) {
-         calculate_haplotypes(hdr, window_start_pointer, current_pointer);
+         calculate_haplotypes(mi, hdr, window_start_pointer, current_pointer);
          window_start_pointer = current_pointer;
          window_chr_id_start = current_pointer->CHR_ID;
          window_start_pos = current_pointer->pos;
       }
 
-      if(current_pointer->pos < (window_start_pos - window)) {
-         calculate_haplotypes(hdr, window_start_pointer, current_pointer);
+      //calculate and shift
+      if((int)(current_pointer->pos) <= (window_start_pos - window)) {
+         calculate_haplotypes(mi, hdr, window_start_pointer, current_pointer);
+
+         int new_start_pos = window_start_pos - window_shift;
+         if(new_start_pos <=0) break;
 
          //window shift
-         while (window_start_pointer->pos >= (window_start_pos - window_shift)){//} && window_start_pointer->next != NULL){
+         while (window_start_pointer->pos > new_start_pos){
             window_start_pointer = window_start_pointer->next;
          }
 
@@ -178,9 +252,7 @@ void hadleGTList(bcf_hdr_t *hdr, int window, int window_shift){
       }
    }
    //last SNP batch
-   calculate_haplotypes(hdr, window_start_pointer, current_pointer->next);
-
-   printf("\nWELL DONE\n\n");
+   calculate_haplotypes(mi, hdr, window_start_pointer, current_pointer->next);
 }
 
 //insertion at the beginning
@@ -230,15 +302,29 @@ void insertafternode(struct node *list, unsigned long pos, bcf1_t *rec, int CHR_
    lk->next = list->next;
    list->next = lk;
 }
+
 void deleteatbegin(){
-   head = head->next;
+   struct node *temp = head;
+   head = temp->next;
+   free(temp->ALT);
+   free(temp->REF);
+   bcf_destroy(temp->rec);
+   free(temp);
 }
-void deleteatend(){
-   struct node *linkedlist = head;
-   while (linkedlist->next->next != NULL)
-      linkedlist = linkedlist->next;
-   linkedlist->next = NULL;
+
+void deleteList(){
+   printf("DELETE_LIST\n");
+   while (head != NULL)
+   {
+      deleteatbegin();
+   }
+   printf("DELETE_LIST2\n");
 }
+
+bool isListEmpty(){
+   return head == NULL;
+}
+
 void deletenode(int key){
    struct node *temp = head, *prev;
    if (temp != NULL && temp->pos == key) {

@@ -818,7 +818,7 @@ mm_idx_t *mm_idx_reader_read(mm_idx_reader_t *r, int n_threads, char *modified_i
 //			FILE *file5;
 //			file5 = fopen("test/new_minimizers.txt", "w");
 //			mm_idx_manipulate(/*file5, */new_mi);
-			mm_idx_manipulate(mi, vcf_with_variants);
+			mm_idx_manipulate_phased(mi, vcf_with_variants);
 //			fclose(file5);
 
 //			FILE *file4;
