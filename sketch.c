@@ -239,129 +239,135 @@ void add_variants(mm_idx_t * mi, char * CHR, char ** REF_arr, char ** ALT_arr, c
 
     //printf("CHR=%s REF=%s ALT=%s POS=%ul \n", snp_contig_name, snp_from, snp_to, snp_position);
 
-    // //Find seq
-    // uint64_t contig_offset;
-    // uint64_t seq_num;
-    // for (int i = 0; i < mi->n_seq; i++) {
-    //     if (strcmp(snp_contig_name, mi->seq[i].name) == 0) {
-    //         contig_offset = mi->seq[i].offset;
-    //         seq_num = i;
-    //     }
-    // }
+    //Find seq
+    uint64_t contig_offset;
+    int seq_num = -1;
+    for (int i = 0; i < mi->n_seq; i++) {
+        if (strcmp(snp_contig_name, mi->seq[i].name) == 0) {
+            contig_offset = mi->seq[i].offset;
+            //printf("%s_%ul\n", snp_contig_name, contig_offset);
+            seq_num = i;
+        }
+    }
+    //обработка ошибки если не найдено
+    if(seq_num == -1) {
+        printf("Contig %s id not found in reference\n", snp_contig_name);
+        return;
+    }
 
-    // int SIDE_SIZE = (mi->k - 1) + mi->w;
-    // // Calculate number of chunks:
-    // // side chunks: take k-mer size, subtract 1 and add window size
-    // // divided by chunk size and multiplied by 2 as it has 2 sides, and one for center
-    // int SEQ_CHUNK_NUMBER = SIDE_SIZE / 8 * 2 + 1;
-    // // add extra two side chunks if (mi->k - 1 + 10) is not a multiple of 8
-    // int EXTRA_GAP = (8 - SIDE_SIZE % 8) % 8;
-    // SEQ_CHUNK_NUMBER = (EXTRA_GAP) ? SEQ_CHUNK_NUMBER + 2 : SEQ_CHUNK_NUMBER;
-    // uint32_t seq[SEQ_CHUNK_NUMBER];
-    // // printf("SNPPOS=%ul\n",snp_position );
-    // // printf("SNPPOS=%ul\n",contig_offset );
-    // // printf("CHUNKS=%ul\n",SEQ_CHUNK_NUMBER );
+    int SIDE_SIZE = (mi->k - 1) + mi->w;
+    // Calculate number of chunks:
+    // side chunks: take k-mer size, subtract 1 and add window size
+    // divided by chunk size and multiplied by 2 as it has 2 sides, and one for center
+    int SEQ_CHUNK_NUMBER = SIDE_SIZE / 8 * 2 + 1;
+    // add extra two side chunks if (mi->k - 1 + 10) is not a multiple of 8
+    int EXTRA_GAP = (8 - SIDE_SIZE % 8) % 8;
+    SEQ_CHUNK_NUMBER = (EXTRA_GAP) ? SEQ_CHUNK_NUMBER + 2 : SEQ_CHUNK_NUMBER;
+    uint32_t seq[SEQ_CHUNK_NUMBER];
+    // printf("SNPPOS=%ul\n",snp_position );
+    // printf("SNPPOS=%ul\n",contig_offset );
+    // printf("CHUNKS=%ul\n",SEQ_CHUNK_NUMBER );
 
-    // for (int i = 0; i < SEQ_CHUNK_NUMBER; i++) {
-    //     if (
-    //             // Out of bounds
-    //             (contig_offset == 0 && (snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i < 0) ||
-    //             ((contig_offset + snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i) * 8 >= contig_offset + mi->seq[seq_num].len ||
-    //             ((contig_offset + snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i + 1) * 8 <= contig_offset
-    //             )
-    //         seq[i] = 1145324612; // ALL N
-    //     else {
-    //         seq[i] = mi->S[(contig_offset + snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i];
-    //         // At left bound
-    //         if (((contig_offset + snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i) * 8 < contig_offset &&
-    //             ((contig_offset + snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i + 1) * 8 > contig_offset) {
-    //             if (contig_offset % 8 == 0)
-    //                 seq[i] = 1145324612; // ALL N
-    //             else {
-    //                 seq[i] = seq[i] >> (4 * (contig_offset % 8));
-    //                 for (int j = 0; j < contig_offset % 8; j++)
-    //                     seq[i] = (seq[i] << 4) + 4;
-    //             }
-    //         }
-    //         // At right bound
-    //         if (((contig_offset + snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i) * 8 < contig_offset + mi->seq[seq_num].len &&
-    //             ((contig_offset + snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i + 1) * 8 > contig_offset + mi->seq[seq_num].len) {
-    //             seq[i] = seq[i] << (4 * (8 - (contig_offset + mi->seq[seq_num].len) % 8));
-    //             for (int j = 0; j < 8 - (contig_offset + mi->seq[seq_num].len) % 8; j++)
-    //                 seq[i] = (seq[i] >> 4) | 1073741824; // FIRST N
-    //         }
-    //     }
-    // }
+    for (int i = 0; i < SEQ_CHUNK_NUMBER; i++) {
+        if (
+                // Out of bounds
+                (contig_offset == 0 && (snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i < 0) ||
+                ((contig_offset + snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i) * 8 >= contig_offset + mi->seq[seq_num].len ||
+                ((contig_offset + snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i + 1) * 8 <= contig_offset
+                )
+            seq[i] = 1145324612; // ALL N
+        else {
+            seq[i] = mi->S[(contig_offset + snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i];
+            // At left bound
+            if (((contig_offset + snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i) * 8 < contig_offset &&
+                ((contig_offset + snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i + 1) * 8 > contig_offset) {
+                if (contig_offset % 8 == 0)
+                    seq[i] = 1145324612; // ALL N
+                else {
+                    seq[i] = seq[i] >> (4 * (contig_offset % 8));
+                    for (int j = 0; j < contig_offset % 8; j++)
+                        seq[i] = (seq[i] << 4) + 4;
+                }
+            }
+            // At right bound
+            if (((contig_offset + snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i) * 8 < contig_offset + mi->seq[seq_num].len &&
+                ((contig_offset + snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i + 1) * 8 > contig_offset + mi->seq[seq_num].len) {
+                seq[i] = seq[i] << (4 * (8 - (contig_offset + mi->seq[seq_num].len) % 8));
+                for (int j = 0; j < 8 - (contig_offset + mi->seq[seq_num].len) % 8; j++)
+                    seq[i] = (seq[i] >> 4) | 1073741824; // FIRST N
+            }
+        }
+    }
 
-    // char original_ref_seq[SEQ_CHUNK_NUMBER * 8 + 1];
-    // original_ref_seq[SEQ_CHUNK_NUMBER * 8] = '\0';
-    // for (int i = 0; i < SEQ_CHUNK_NUMBER; i++) {
-    //     uint32_t tmp_seq = seq[i];
-    //     for (int j = 0; j < 8; j++) {
-    //         uint32_t tmp = tmp_seq % 16;
-    //         switch (tmp) {
-    //             case 0:
-    //                 original_ref_seq[i * 8 + j] = 'A';
-    //                 break;
-    //             case 1:
-    //                 original_ref_seq[i * 8 + j] = 'C';
-    //                 break;
-    //             case 2:
-    //                 original_ref_seq[i * 8 + j] = 'G';
-    //                 break;
-    //             case 3:
-    //                 original_ref_seq[i * 8 + j] = 'T';
-    //                 break;
-    //             case 4:
-    //                 original_ref_seq[i * 8 + j] = 'N';
-    //         }
-    //         tmp_seq = tmp_seq / 16;
-    //     }
-    // }
+    char original_ref_seq[SEQ_CHUNK_NUMBER * 8 + 1];
+    original_ref_seq[SEQ_CHUNK_NUMBER * 8] = '\0';
+    for (int i = 0; i < SEQ_CHUNK_NUMBER; i++) {
+        uint32_t tmp_seq = seq[i];
+        for (int j = 0; j < 8; j++) {
+            uint32_t tmp = tmp_seq % 16;
+            switch (tmp) {
+                case 0:
+                    original_ref_seq[i * 8 + j] = 'A';
+                    break;
+                case 1:
+                    original_ref_seq[i * 8 + j] = 'C';
+                    break;
+                case 2:
+                    original_ref_seq[i * 8 + j] = 'G';
+                    break;
+                case 3:
+                    original_ref_seq[i * 8 + j] = 'T';
+                    break;
+                case 4:
+                    original_ref_seq[i * 8 + j] = 'N';
+            }
+            tmp_seq = tmp_seq / 16;
+        }
+    }
 
-    // if (N_SNP == 1) {
-    //     //Single SNP
-    //     char new_ref_seq[SEQ_CHUNK_NUMBER * 8 + 1];
-    //     memcpy(new_ref_seq, original_ref_seq, SEQ_CHUNK_NUMBER * 8 + 1);
-    //     new_ref_seq[EXTRA_GAP + SIDE_SIZE + (contig_offset + snp_position - 1) % 8] = snp_to;
+    if (N_SNP == 1) {
+        //Single SNP
+        char new_ref_seq[SEQ_CHUNK_NUMBER * 8 + 1];
+        memcpy(new_ref_seq, original_ref_seq, SEQ_CHUNK_NUMBER * 8 + 1);
+        new_ref_seq[EXTRA_GAP + SIDE_SIZE + (contig_offset + snp_position - 1) % 8] = snp_to;
 
-    //     //Finds minimizer in window
-    //     mm128_v minimizer_array = {0, 0, 0};
-    //     mm_sketch(0, &new_ref_seq[EXTRA_GAP + (contig_offset + snp_position - 1) % 8], SIDE_SIZE * 2 + 1, mi->w, mi->k,
-    //                 0, mi->flag & MM_I_HPC, &minimizer_array);
+        //Finds minimizer in window
+        mm128_v minimizer_array = {0, 0, 0};
+        mm_sketch(0, &new_ref_seq[EXTRA_GAP + (contig_offset + snp_position - 1) % 8], SIDE_SIZE * 2 + 1, mi->w, mi->k,
+                    0, mi->flag & MM_I_HPC, &minimizer_array);
 
-    //     for (int i = 0; i < minimizer_array.n; i++) {
-    //         if (minimizer_array.a[i].y < SIDE_SIZE * 2) continue;
-    //         if (minimizer_array.a[i].y > (SIDE_SIZE + mi->k) * 2 - 1) continue;
-    //         minimizer_array.a[i].y = (seq_num << 32) + (snp_position - SIDE_SIZE - 1 + minimizer_array.a[i].y / 2) * 2 +
-    //                                     (minimizer_array.a[i].y % 2);
-    //         mm_idx_push(mi, minimizer_array.a[i].x, minimizer_array.a[i].y);
-    //     }
-    // }
-    // else {
-    //     //SNP group
-    //     for (int i = N_SNP - 2; i >= 0; i--){
-    //         //REST SNPs
+        for (int i = 0; i < minimizer_array.n; i++) {
+            if (minimizer_array.a[i].y < SIDE_SIZE * 2) continue;
+            if (minimizer_array.a[i].y > (SIDE_SIZE + mi->k) * 2 - 1) continue;
+            minimizer_array.a[i].y = (seq_num << 32) + (snp_position - SIDE_SIZE - 1 + minimizer_array.a[i].y / 2) * 2 +
+                                        (minimizer_array.a[i].y % 2);
+            mm_idx_push(mi, minimizer_array.a[i].x, minimizer_array.a[i].y);
+        }
+    }
+    else {
+        //SNP group
+        for (int i = N_SNP - 2; i >= 0; i--){
+            //REST SNPs
 
-    //     }
+        }
 
-    //     char new_ref_seq[SEQ_CHUNK_NUMBER * 8 + 1];
-    //     memcpy(new_ref_seq, original_ref_seq, SEQ_CHUNK_NUMBER * 8 + 1);
-    //     new_ref_seq[EXTRA_GAP + SIDE_SIZE + (contig_offset + snp_position - 1) % 8] = snp_to;
+        char new_ref_seq[SEQ_CHUNK_NUMBER * 8 + 1];
+        memcpy(new_ref_seq, original_ref_seq, SEQ_CHUNK_NUMBER * 8 + 1);
+        new_ref_seq[EXTRA_GAP + SIDE_SIZE + (contig_offset + snp_position - 1) % 8] = snp_to;
 
-    //     //Finds minimizer in window
-    //     mm128_v minimizer_array = {0, 0, 0};
-    //     mm_sketch(0, &new_ref_seq[EXTRA_GAP + (contig_offset + snp_position - 1) % 8], SIDE_SIZE * 2 + 1, mi->w, mi->k,
-    //                 0, mi->flag & MM_I_HPC, &minimizer_array);
+        //Finds minimizer in window
+        mm128_v minimizer_array = {0, 0, 0};
+        mm_sketch(0, &new_ref_seq[EXTRA_GAP + (contig_offset + snp_position - 1) % 8], SIDE_SIZE * 2 + 1, mi->w, mi->k,
+                    0, mi->flag & MM_I_HPC, &minimizer_array);
 
-    //     for (int i = 0; i < minimizer_array.n; i++) {
-    //         if (minimizer_array.a[i].y < SIDE_SIZE * 2) continue;
-    //         if (minimizer_array.a[i].y > (SIDE_SIZE + mi->k) * 2 - 1) continue;
-    //         minimizer_array.a[i].y = (seq_num << 32) + (snp_position - SIDE_SIZE - 1 + minimizer_array.a[i].y / 2) * 2 +
-    //                                     (minimizer_array.a[i].y % 2);
-    //         mm_idx_push(mi, minimizer_array.a[i].x, minimizer_array.a[i].y);
-    //     }
-    // }
+        for (int i = 0; i < minimizer_array.n; i++) {
+            if (minimizer_array.a[i].y < SIDE_SIZE * 2) continue;
+            if (minimizer_array.a[i].y > (SIDE_SIZE + mi->k) * 2 - 1) continue;
+            minimizer_array.a[i].y = (seq_num << 32) + (snp_position - SIDE_SIZE - 1 + minimizer_array.a[i].y / 2) * 2 +
+                                        (minimizer_array.a[i].y % 2);
+            mm_idx_push(mi, minimizer_array.a[i].x, minimizer_array.a[i].y);
+        }
+    }
 
     //printf("\n");
 }
