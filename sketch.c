@@ -161,9 +161,6 @@ void read_vcf(mm_idx_t * mi, char *fname)
 
     int chr_id = -1;
 
-    int window = 20;
-    int window_shift = 10;
-
     //save for each vcf record
     while ( bcf_read(fp, hdr, rec)>=0 )
     {
@@ -181,7 +178,7 @@ void read_vcf(mm_idx_t * mi, char *fname)
                 chr_id = new_chr_id;
                 if(!isListEmpty()){
                     printf("CHR = %s;\n", bcf_hdr_id2name(hdr, chr_id));
-                    hadleGTList(mi, hdr, window, window_shift);
+                    hadleGTList(mi, hdr);
                     deleteList();
                 }
             }
@@ -196,7 +193,7 @@ void read_vcf(mm_idx_t * mi, char *fname)
         bcf_empty(rec);
     }
 
-    hadleGTList(mi, hdr, window, window_shift);
+    hadleGTList(mi, hdr);
     printf("CHR = %s;\n", bcf_hdr_id2name(hdr, chr_id));
 
     deleteList();
@@ -221,23 +218,19 @@ void mm_idx_manipulate_phased(mm_idx_t * mi, char *vcf_with_variants) {
 //POS_all ulong array - positions
 //CHR - chromosome
 //N_SNP - length
-void add_variants(mm_idx_t * mi, char * CHR, char ** REF_arr, char ** ALT_arr, char ** POS_all, int N_SNP)
+void add_variants(mm_idx_t * mi, char * CHR, char ** REF_arr, char ** ALT_arr, unsigned long * POS_all, int N_SNP, unsigned long curr_pos)
 {
+    // printf("CURR_POS=%ul\n", curr_pos);
     // for (int i = N_SNP -1; i >= 0; i--){
-    //     printf("CHR=%s REF=%s ALT=%s POS=%ul \n", CHR, REF_arr[i], ALT_arr[i], POS_all[i]);
+    //     printf("CHR=%s REF=%s ALT=%s POS=%ul\n", CHR, REF_arr[i], ALT_arr[i], POS_all[i]);
     // }
+    // printf("\n");
 
     if (N_SNP == 0)
         return;
 
     const char *snp_contig_name = CHR;
-    const unsigned long snp_position = POS_all[N_SNP -1];
-    // Should be used for testing
-    const char * snp_from = REF_arr[N_SNP -1];
-    // WARNING! str[4][0] because of \n as str[4][1]
-    const char * snp_to = ALT_arr[N_SNP -1];
-
-    //printf("CHR=%s REF=%s ALT=%s POS=%ul \n", snp_contig_name, snp_from, snp_to, snp_position);
+    const unsigned long snp_position = curr_pos;
 
     //Find seq
     uint64_t contig_offset;
@@ -325,51 +318,43 @@ void add_variants(mm_idx_t * mi, char * CHR, char ** REF_arr, char ** ALT_arr, c
         }
     }
 
-    if (N_SNP == 1) {
-        //Single SNP
-        char new_ref_seq[SEQ_CHUNK_NUMBER * 8 + 1];
-        memcpy(new_ref_seq, original_ref_seq, SEQ_CHUNK_NUMBER * 8 + 1);
-        new_ref_seq[EXTRA_GAP + SIDE_SIZE + (contig_offset + snp_position - 1) % 8] = snp_to;
 
-        //Finds minimizer in window
-        mm128_v minimizer_array = {0, 0, 0};
-        mm_sketch(0, &new_ref_seq[EXTRA_GAP + (contig_offset + snp_position - 1) % 8], SIDE_SIZE * 2 + 1, mi->w, mi->k,
-                    0, mi->flag & MM_I_HPC, &minimizer_array);
+    char new_ref_seq[SEQ_CHUNK_NUMBER * 8 + 1];
+    memcpy(new_ref_seq, original_ref_seq, SEQ_CHUNK_NUMBER * 8 + 1);
 
-        for (int i = 0; i < minimizer_array.n; i++) {
-            if (minimizer_array.a[i].y < SIDE_SIZE * 2) continue;
-            if (minimizer_array.a[i].y > (SIDE_SIZE + mi->k) * 2 - 1) continue;
-            minimizer_array.a[i].y = (seq_num << 32) + (snp_position - SIDE_SIZE - 1 + minimizer_array.a[i].y / 2) * 2 +
-                                        (minimizer_array.a[i].y % 2);
-            mm_idx_push(mi, minimizer_array.a[i].x, minimizer_array.a[i].y);
-        }
-    }
-    else {
-        //SNP group
-        for (int i = N_SNP - 2; i >= 0; i--){
-            //REST SNPs
+    //printf("%s\n", new_ref_seq);
 
-        }
+    //printf("%d\n", snp_position);
+    for (int i = N_SNP -1; i >= 0; i--) {
+        //add single SNP
+        // printf("%d\n", EXTRA_GAP);
+        // printf("%d\n", contig_offset);
+        // printf("%d\n", contig_offset);
+//        new_ref_seq[EXTRA_GAP + (POS_all[i] - snp_position) + SEQ_CHUNK_NUMBER * 4] = ALT_arr[i][0] - 'A' + 'a';
+        //printf("POS = %d\n", POS_all[i]);
 
-        char new_ref_seq[SEQ_CHUNK_NUMBER * 8 + 1];
-        memcpy(new_ref_seq, original_ref_seq, SEQ_CHUNK_NUMBER * 8 + 1);
-        new_ref_seq[EXTRA_GAP + SIDE_SIZE + (contig_offset + snp_position - 1) % 8] = snp_to;
-
-        //Finds minimizer in window
-        mm128_v minimizer_array = {0, 0, 0};
-        mm_sketch(0, &new_ref_seq[EXTRA_GAP + (contig_offset + snp_position - 1) % 8], SIDE_SIZE * 2 + 1, mi->w, mi->k,
-                    0, mi->flag & MM_I_HPC, &minimizer_array);
-
-        for (int i = 0; i < minimizer_array.n; i++) {
-            if (minimizer_array.a[i].y < SIDE_SIZE * 2) continue;
-            if (minimizer_array.a[i].y > (SIDE_SIZE + mi->k) * 2 - 1) continue;
-            minimizer_array.a[i].y = (seq_num << 32) + (snp_position - SIDE_SIZE - 1 + minimizer_array.a[i].y / 2) * 2 +
-                                        (minimizer_array.a[i].y % 2);
-            mm_idx_push(mi, minimizer_array.a[i].x, minimizer_array.a[i].y);
-        }
+        new_ref_seq[(EXTRA_GAP + SIDE_SIZE + (contig_offset + snp_position - 1) % 8) + (POS_all[i] - snp_position)] = ALT_arr[i][0] - 'A' + 'a';
     }
 
+    //printf("%s\n", new_ref_seq);
     //printf("\n");
+
+    //Finds minimizer in window
+    mm128_v minimizer_array = {0, 0, 0};
+            mm_sketch(0, &new_ref_seq[EXTRA_GAP + mi->w + (contig_offset + snp_position - 1) % 8], mi->k * 2 - 1, mi->w, mi->k,
+                      0, mi->flag & MM_I_HPC, &minimizer_array);
+
+    char new_new_ref_seq2[SEQ_CHUNK_NUMBER * 8 + 1];
+    memcpy(new_new_ref_seq2, &new_ref_seq[EXTRA_GAP + mi->w + (contig_offset + snp_position - 1) % 8], mi->k * 2 - 1);
+    //printf("%s\n", new_new_ref_seq2);
+
+    for (int i = 0; i < minimizer_array.n; i++) {
+        //if (minimizer_array.a[i].y < SIDE_SIZE * 2) continue;
+        //if (minimizer_array.a[i].y > (SIDE_SIZE + mi->k) * 2 - 1) continue;
+        minimizer_array.a[i].y = (seq_num << 32) + (snp_position - mi->k - 2 + minimizer_array.a[i].y / 2) * 2 +
+                                    (minimizer_array.a[i].y % 2);
+        mm_idx_push(mi, minimizer_array.a[i].x, minimizer_array.a[i].y);
+    }
 }
 
 

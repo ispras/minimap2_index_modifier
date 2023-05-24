@@ -82,7 +82,7 @@ int ifexists(char* z[], int u, char* v)
 }
 
 
-void calculate_haplotypes(mm_idx_t * mi, bcf_hdr_t *hdr, struct node *window_start_pointer, struct node *current_pointer){
+void calculate_haplotypes(mm_idx_t * mi, bcf_hdr_t *hdr, struct node *window_start_pointer, struct node *current_pointer, unsigned long curr_pos){
    //Even though vcf uses 1-based indexing (i.e. first base is base 1), htslib internally uses 0-based indexing (i.e. bcf1_t::pos is 0 based).
    //http://wresch.github.io/2014/11/18/process-vcf-file-with-htslib.html
    //so we need use (pos + 1)
@@ -173,86 +173,50 @@ void calculate_haplotypes(mm_idx_t * mi, bcf_hdr_t *hdr, struct node *window_sta
          local_w_start_pointer = local_w_start_pointer->next;
       }
       if (N_SNP > 0) {
-         add_variants(mi, CHR, REF_arr, ALT_arr, POS_all, N_SNP);
+         add_variants(mi, CHR, REF_arr, ALT_arr, POS_all, N_SNP, curr_pos + 1);
          //printf("-\n");
       }
    }
 
-   //printf("==============\n");
-
-   //print all SNP combinations
-   // for(int i = 0; i<10000; i++) {
-   //    if(strcmp(gt_array[i], "\0")) {
-   //       printf("%s\n", gt_array[i]);
-   //    }
-   // }
-
-   //print all SNP combinations
-   // for(int i = 0; i<10000; i++) {
-   //    if(strcmp(gt_array[i], "\0")) {
-   //       printf("%s\n", gt_array[i]);
-   //    }
-   // }
-
-
-   // for (int j = 0; j < sample_num; j++){
-   //    printf("%s\n", gt_array[j*2]);
-   //    printf("%s\n", gt_array[j*2+1]);
-   // }
-
-   // for (int i = 0; i < snp_num; i++){
-   //    for (int j = 0; j < sample_num; j++){
-   //       //printf("%c|", gt_array[j*2][i] );
-   //       //printf("%c \t", gt_array[j*2+1][i] );
-   //    }
-   //    //printf("\n");
-   // }
-
-
-   //printf("CHR = %s;\n\n", bcf_hdr_id2name(hdr, window_start_pointer->CHR_ID));
    return;
 }
 
-void hadleGTList(mm_idx_t * mi, bcf_hdr_t *hdr, int window, int window_shift){
-   struct node *current_pointer = head;
+void hadleGTList(mm_idx_t * mi, bcf_hdr_t *hdr){
    struct node *window_start_pointer = head;
+   struct node *current_pointer = head;
+   struct node *window_end_pointer = head;
+
+   int gap = mi->k - 1;
 
    if (head == NULL)
       return;
 
-   int window_start_pos = head->pos;
-   int window_chr_id_start = head->CHR_ID;
-
-   while(current_pointer->next != NULL)
+   while(window_end_pointer->next != NULL)
    {
+      while(window_end_pointer->pos > current_pointer->pos - gap){
+         window_end_pointer = window_end_pointer->next;
+      }
+
+      while(window_start_pointer->pos > current_pointer->pos + gap){
+         window_start_pointer = window_start_pointer->next;
+      }
+
+      //calculate start and end pointers
+      //DONT FORGET TO PASS CURRENT POINTER!!!!
+      //CURRENT POINTER CAN BE INACTIVE(!)
+      //printf("%d\n", current_pointer->pos+1);
+      calculate_haplotypes(mi, hdr, window_start_pointer, window_end_pointer, current_pointer->pos);
+
       current_pointer = current_pointer->next;
-
-      if(window_chr_id_start != current_pointer->CHR_ID) {
-         calculate_haplotypes(mi, hdr, window_start_pointer, current_pointer);
-         window_start_pointer = current_pointer;
-         window_chr_id_start = current_pointer->CHR_ID;
-         window_start_pos = current_pointer->pos;
-      }
-
-      //calculate and shift
-      if((int)(current_pointer->pos) <= (window_start_pos - window)) {
-         calculate_haplotypes(mi, hdr, window_start_pointer, current_pointer);
-
-         int new_start_pos = window_start_pos - window_shift;
-         if(new_start_pos <=0) break;
-
-         //window shift
-         while (window_start_pointer->pos > new_start_pos){
-            window_start_pointer = window_start_pointer->next;
-         }
-
-         window_chr_id_start = window_start_pointer->CHR_ID;
-         window_start_pos = window_start_pointer->pos;
-         current_pointer = window_start_pointer;
-      }
+      window_end_pointer = current_pointer;
    }
+
    //last SNP batch
-   calculate_haplotypes(mi, hdr, window_start_pointer, current_pointer->next);
+   while(window_start_pointer->pos > current_pointer->pos + gap){
+      window_start_pointer = window_start_pointer->next;
+   }
+
+   calculate_haplotypes(mi, hdr, window_start_pointer, window_end_pointer->next, current_pointer->pos);
 }
 
 //insertion at the beginning
