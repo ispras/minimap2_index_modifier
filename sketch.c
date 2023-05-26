@@ -341,19 +341,22 @@ void add_variants(mm_idx_t * mi, char * CHR, char ** REF_arr, char ** ALT_arr, u
 
     //Finds minimizer in window
     mm128_v minimizer_array = {0, 0, 0};
-            mm_sketch(0, &new_ref_seq[EXTRA_GAP + mi->w + (contig_offset + snp_position - 1) % 8], mi->k * 2 - 1, mi->w, mi->k,
+            mm_sketch(0, &new_ref_seq[EXTRA_GAP + (contig_offset + snp_position - 1) % 8], SIDE_SIZE * 2 + 1, mi->w, mi->k,
                       0, mi->flag & MM_I_HPC, &minimizer_array);
 
-    char new_new_ref_seq2[SEQ_CHUNK_NUMBER * 8 + 1];
-    memcpy(new_new_ref_seq2, &new_ref_seq[EXTRA_GAP + mi->w + (contig_offset + snp_position - 1) % 8], mi->k * 2 - 1);
+    //char new_new_ref_seq2[SEQ_CHUNK_NUMBER * 8 + 1];
+    //memcpy(new_new_ref_seq2, &new_ref_seq[EXTRA_GAP + (contig_offset + snp_position - 1) % 8], SIDE_SIZE * 2 + 1);
     //printf("%s\n", new_new_ref_seq2);
 
     for (int i = 0; i < minimizer_array.n; i++) {
-        //if (minimizer_array.a[i].y < SIDE_SIZE * 2) continue;
-        //if (minimizer_array.a[i].y > (SIDE_SIZE + mi->k) * 2 - 1) continue;
-        minimizer_array.a[i].y = (seq_num << 32) + (snp_position - mi->k - 2 + minimizer_array.a[i].y / 2) * 2 +
+        //printf("%d\n", minimizer_array.a[i].y);
+        if (minimizer_array.a[i].y < SIDE_SIZE * 2) continue;
+        if (minimizer_array.a[i].y > (SIDE_SIZE + mi->k) * 2 - 1) continue;
+        minimizer_array.a[i].y = (seq_num << 32) + (snp_position - SIDE_SIZE - 1 + minimizer_array.a[i].y / 2) * 2 +
                                     (minimizer_array.a[i].y % 2);
-        mm_idx_push(mi, minimizer_array.a[i].x, minimizer_array.a[i].y);
+        //printf("dd%d\n\n", minimizer_array.a[i].y);
+        mm_idx_push_modified(mi, minimizer_array.a[i]);
+        //mm_idx_push(mi, minimizer_array.a[i].x, minimizer_array.a[i].y);
     }
 }
 

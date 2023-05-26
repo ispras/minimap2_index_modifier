@@ -193,11 +193,11 @@ void hadleGTList(mm_idx_t * mi, bcf_hdr_t *hdr){
 
    while(window_end_pointer->next != NULL)
    {
-      while(window_end_pointer->pos > current_pointer->pos - gap){
+      while(window_end_pointer != NULL && window_end_pointer->pos > (current_pointer->pos - gap)){
          window_end_pointer = window_end_pointer->next;
       }
 
-      while(window_start_pointer->pos > current_pointer->pos + gap){
+      while(window_start_pointer->pos > (current_pointer->pos + gap)){
          window_start_pointer = window_start_pointer->next;
       }
 
