@@ -228,6 +228,37 @@ static void worker_post(void *g, long i, int tid)
 	// sort by minimizer
 	radix_sort_128x(b->a.a, b->a.a + b->a.n);
 
+    /*
+    // stay only unique
+    mm128_t *tmp = (mm128_t*)calloc(b->a.n, 16);
+    size_t l, q, e;
+    tmp[0].x = b->a.a[0].x;
+    tmp[0].y = b->a.a[0].y;
+    q = 1;
+    for (l = 1; l < b->a.n; l++) {
+        int exist = 0;
+        for (e = 0; e < q; e++) {
+            if (b->a.a[l].y == tmp[e].y && b->a.a[l].x == tmp[e].x) {
+                exist = 1;
+                break;
+            }
+        }
+        if (exist == 0) {
+            tmp[q].x = b->a.a[l].x;
+            tmp[q].y = b->a.a[l].y;
+            q++;
+        }
+    }
+    if (q == b->a.n) {
+        free(tmp);
+    } else {
+        tmp = (mm128_v*) realloc(tmp, sizeof(mm128_v) * q);
+        free(b->a.a);
+        b->a.a = &tmp;
+        b->a.n = q;
+    }*/
+
+
 	// count and preallocate
 	for (j = 1, n = 1, n_keys = 0, b->n = 0; j <= b->a.n; ++j) {
 		if (j == b->a.n || b->a.a[j].x>>8 != b->a.a[j-1].x>>8) {
@@ -380,6 +411,33 @@ static void *worker_pipeline(void *shared, int step, void *in)
 
 		free(s->seq); s->seq = 0;
 
+
+
+        // stay only unique
+        mm128_t *tmp = (mm128_t*)calloc(s->a.n, 16);
+        size_t l, q, e;
+        tmp[0].x = s->a.a[0].x;
+        tmp[0].y = s->a.a[0].y;
+        q = 1;
+        for (l = 1; l < s->a.n; l++) {
+            int exist = 0;
+            for (e = 0; e < q; e++) {
+                if (s->a.a[l].y == tmp[e].y && s->a.a[l].x == tmp[e].x) {
+                    exist = 1;
+                    break;
+                }
+            }
+            if (exist == 0) {
+                tmp[q].x = s->a.a[l].x;
+                tmp[q].y = s->a.a[l].y;
+                q++;
+            }
+        }
+        tmp = (mm128_v *) realloc(tmp, sizeof(mm128_v) * q);
+
+        memcpy(s->a.a, tmp, q * 16);
+        free(tmp);
+        s->a.n = q;
 
 		return s;
     } else if (step == 2) { // dispatch sketch to buckets
