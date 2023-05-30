@@ -4,4 +4,6 @@ make
 
 
 ## Run modified index creation
-./minimap2 -d test/test.mni --modified-index-file test/test.modified.mni --vcf-file-with-variants test/test.vcf test/test.fasta
+bgzip -c test.vcf > test.vcf.gz
+tabix -p vcf test.vcf.gz
+./minimap2 -d test/test.modified.mni --vcf-file-with-variants test/test.vcf.gz test/test.fasta

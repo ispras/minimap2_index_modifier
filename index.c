@@ -15,6 +15,12 @@
 #include "kvec.h"
 #include "khash.h"
 
+#include <htslib/hts.h>
+#include <htslib/vcf.h>
+#include <htslib/tbx.h>
+#include <htslib/kstring.h>
+#include <htslib/kseq.h>
+
 #define idx_hash(a) ((a)>>1)
 #define idx_eq(a, b) ((a)>>1 == (b)>>1)
 KHASH_INIT(idx, uint64_t, uint64_t, 1, idx_hash, idx_eq)
@@ -95,86 +101,6 @@ const uint64_t *mm_idx_get(const mm_idx_t *mi, uint64_t minier, int *n)
 		*n = (uint32_t)kh_val(h, k);
 		return &b->p[kh_val(h, k)>>32];
 	}
-}
-
-void *mm_idx_push(const mm_idx_t *mi, uint64_t minier, uint64_t n)
-{
-    int mask = (1<<mi->b) - 1;
-    khint_t k;
-    mm_idx_bucket_t *b = &mi->B[minier>>8&mask];
-    idxhash_t *h = (idxhash_t*)b->h;
-    if (h == 0) return 0;
-    k = kh_get(idx, h, minier>>8>>mi->b<<1);
-    if (k == kh_end(h)) return 0;
-    uint32_t m;
-    uint64_t *tmp;
-    if (kh_key(h, k)&1) { // special casing when there is only one k-mer
-        m = 1;
-        tmp = &kh_val(h, k);
-    } else {
-        m = (uint32_t)kh_val(h, k);
-        tmp = &b->p[kh_val(h, k)>>32];
-    }
-
-    if (m > 1) {
-        uint64_t * new_val;
-        new_val = malloc(sizeof(uint64_t) * (m + 1));
-
-        int i = 0;
-        int j = 0;
-        int ok = 0;
-        while (j < m + 1) {
-            if (n == tmp[i]) {
-                free(new_val);
-                return 0;
-            }
-            if (!ok && (n < tmp[i])) {
-                new_val[j] = n;
-                j++; ok++;
-            } else {
-                new_val[j] = tmp[i];
-                j++; i++;
-            }
-        }
-
-        b->n = b->n + 1;
-        b->p = realloc(b->p, sizeof(uint64_t) * b->n);
-
-        if ((b->n - (kh_val(h, k) >> 32) - m - 1) > 0) { // Works properly without this condition
-            //fprintf(fp, "%lu\n", n);
-            tmp = malloc(sizeof(uint64_t) * (b->n - (kh_val(h, k) >> 32) - m - 1));
-            memcpy(tmp, &b->p[(kh_val(h, k) >> 32) + m], sizeof(uint64_t) * (b->n - (kh_val(h, k) >> 32) - m - 1));
-
-            memcpy(&b->p[kh_val(h, k) >> 32], new_val, sizeof(uint64_t) * (m + 1));
-            memcpy(&b->p[(kh_val(h, k) >> 32) + m + 1], tmp, sizeof(uint64_t) * (b->n - (kh_val(h, k) >> 32) - m - 1));
-
-            free(tmp);
-
-            for (int ind = 0; ind < kh_end(h); ++ind) {
-                if (!kh_exist(h, ind)) continue;
-                if (!(kh_key(h, ind)&1) && (kh_val(h, ind) >> 32) > (kh_value(h, k) >> 32)) {
-                    uint64_t pos = kh_val(h, ind) >> 32;
-                    uint64_t count = kh_val(h, ind) & mask;
-                    pos++;
-                    kh_val(h, ind) = (pos << 32) | count;
-                }
-            }
-        } else {
-            memcpy(&b->p[kh_val(h, k) >> 32], new_val, sizeof(uint64_t) * (m + 1));
-        }
-
-        kh_value(h, k) = kh_value(h, k) >> 32 << 32 | (m + 1);
-        free(new_val);
-
-    } else if (m == 1 && tmp[0] != n) {
-        //fprintf(fp, "%lu\n", n);
-        kh_key(h, k) |= 1;
-        b->n = b->n + 2;
-        b->p = realloc(b->p, sizeof(uint64_t) * b->n);
-        b->p[b->n - 2] = (tmp[0] <= n) ? tmp[0] : n;
-        b->p[b->n - 1] = (tmp[0] >  n) ? tmp[0] : n;
-        kh_val(h, k) = ((uint64_t)(b->n - 2) << 32) | 2;
-    }
 }
 
 void mm_idx_stat(const mm_idx_t *mi)
@@ -343,7 +269,7 @@ static void worker_post(void *g, long i, int tid)
 	kfree(0, b->a.a);
 	b->a.n = b->a.m = 0, b->a.a = 0;
 }
- 
+
 static void mm_idx_post(mm_idx_t *mi, int n_threads)
 {
 	kt_for(n_threads, worker_post, mi, 1<<mi->b);
@@ -362,6 +288,7 @@ typedef struct {
 	uint64_t batch_size, sum_len;
 	mm_bseq_file_t *fp;
 	mm_idx_t *mi;
+	char * vcf_with_variants;
 } pipeline_t;
 
 typedef struct {
@@ -435,15 +362,39 @@ static void *worker_pipeline(void *shared, int step, void *in)
 		} else free(s);
     } else if (step == 1) { // step 1: compute sketch
         step_t *s = (step_t*)in;
+
+		//open vcf file
+		htsFile *fp    = hts_open(p->vcf_with_variants,"rb");
+
+		//read header
+		bcf_hdr_t *hdr = bcf_hdr_read(fp);
+		bcf1_t *rec    = bcf_init();
+
+		tbx_t *idx = tbx_index_load(p->vcf_with_variants);
+
 		for (i = 0; i < s->n_seq; ++i) {
+			//printf("SEQ %d %s\n", s->n_seq, s->seq[i].name);
 			mm_bseq1_t *t = &s->seq[i];
 			if (t->l_seq > 0)
 				mm_sketch(0, t->seq, t->l_seq, p->mi->w, p->mi->k, t->rid, p->mi->flag&MM_I_HPC, &s->a);
 			else if (mm_verbose >= 2)
 				fprintf(stderr, "[WARNING] the length database sequence '%s' is 0\n", t->name);
+			mm_idx_manipulate_phased(p->mi, fp, idx, hdr, rec, &s->a, s->seq[i].name);
 			free(t->seq); free(t->name);
 		}
+
 		free(s->seq); s->seq = 0;
+
+		tbx_destroy(idx);
+		bcf_hdr_destroy(hdr);
+
+		int ret;
+		if ( (ret=hts_close(fp)) )
+		{
+			fprintf(stderr,"hts_close(%s): non-zero status %d\n",p->vcf_with_variants,ret);
+			exit(ret);
+		}
+
 		return s;
     } else if (step == 2) { // dispatch sketch to buckets
         step_t *s = (step_t*)in;
@@ -453,7 +404,7 @@ static void *worker_pipeline(void *shared, int step, void *in)
     return 0;
 }
 
-mm_idx_t *mm_idx_gen(mm_bseq_file_t *fp, int w, int k, int b, int flag, int mini_batch_size, int n_threads, uint64_t batch_size)
+mm_idx_t *mm_idx_gen(mm_bseq_file_t *fp, int w, int k, int b, int flag, int mini_batch_size, int n_threads, uint64_t batch_size, char * vcf_with_variants)
 {
 	pipeline_t pl;
 	if (fp == 0 || mm_bseq_eof(fp)) return 0;
@@ -462,8 +413,10 @@ mm_idx_t *mm_idx_gen(mm_bseq_file_t *fp, int w, int k, int b, int flag, int mini
 	pl.batch_size = batch_size;
 	pl.fp = fp;
 	pl.mi = mm_idx_init(w, k, b, flag);
+	pl.vcf_with_variants = vcf_with_variants;
 
 	kt_pipeline(n_threads < 3? n_threads : 3, worker_pipeline, &pl, 3);
+
 	if (mm_verbose >= 3)
 		fprintf(stderr, "[M::%s::%.3f*%.2f] collected minimizers\n", __func__, realtime() - mm_realtime0, cputime() / (realtime() - mm_realtime0));
 
@@ -474,13 +427,13 @@ mm_idx_t *mm_idx_gen(mm_bseq_file_t *fp, int w, int k, int b, int flag, int mini
 	return pl.mi;
 }
 
-mm_idx_t *mm_idx_build(const char *fn, int w, int k, int flag, int n_threads) // a simpler interface; deprecated
+mm_idx_t *mm_idx_build(const char *fn, int w, int k, int flag, int n_threads, char * vcf_with_variants) // a simpler interface; deprecated
 {
 	mm_bseq_file_t *fp;
 	mm_idx_t *mi;
 	fp = mm_bseq_open(fn);
 	if (fp == 0) return 0;
-	mi = mm_idx_gen(fp, w, k, 14, flag, 1<<18, n_threads, UINT64_MAX);
+	mi = mm_idx_gen(fp, w, k, 14, flag, 1<<18, n_threads, UINT64_MAX, vcf_with_variants);
 	mm_bseq_close(fp);
 	return mi;
 }
@@ -791,7 +744,7 @@ void mm_idx_reader_close(mm_idx_reader_t *r)
 	free(r);
 }
 
-mm_idx_t *mm_idx_reader_read(mm_idx_reader_t *r, int n_threads, char *modified_index_file, char *vcf_with_variants)
+mm_idx_t *mm_idx_reader_read(mm_idx_reader_t *r, int n_threads, char * vcf_with_variants)
 {
 	mm_idx_t *mi;
 	if (r->is_idx) {
@@ -799,39 +752,13 @@ mm_idx_t *mm_idx_reader_read(mm_idx_reader_t *r, int n_threads, char *modified_i
 		if (mi && mm_verbose >= 2 && (mi->k != r->opt.k || mi->w != r->opt.w || (mi->flag&MM_I_HPC) != (r->opt.flag&MM_I_HPC)))
 			fprintf(stderr, "[WARNING]\033[1;31m Indexing parameters (-k, -w or -H) overridden by parameters used in the prebuilt index.\033[0m\n");
 	} else
-		mi = mm_idx_gen(r->fp.seq, r->opt.w, r->opt.k, r->opt.bucket_bits, r->opt.flag, r->opt.mini_batch_size, n_threads, r->opt.batch_size);
+	{
+		mi = mm_idx_gen(r->fp.seq, r->opt.w, r->opt.k, r->opt.bucket_bits, r->opt.flag, r->opt.mini_batch_size, n_threads, r->opt.batch_size, vcf_with_variants);
+	}
 	if (mi) {
 		if (r->fp_out) {
 			mm_idx_dump(r->fp_out, mi);
-
-//			FILE *file1;
-//			file1 = fopen("test/test_idx.txt", "w");
-//			mm_idx_to_txt(file1, mi);
-//			fclose(file1);
-
-
-//			FILE *file2;
-//			file2 = fopen("test/test_idx.txt", "r");
-//			mm_idx_t * new_mi = mm_idx_load_from_txt(file2);
-//			fclose(file2);
-
-//			FILE *file5;
-//			file5 = fopen("test/new_minimizers.txt", "w");
-//			mm_idx_manipulate(/*file5, */new_mi);
-			mm_idx_manipulate_phased(mi, vcf_with_variants);
-//			fclose(file5);
-
-//			FILE *file4;
-//			file4 = fopen("test/test_idx2.txt", "w");
-//			mm_idx_to_txt(file4, new_mi);
-//			fclose(file4);
-
-			FILE *file3;
-//			file3 = fopen("test/test.modified2.mni", "wb");
-			file3 = fopen(modified_index_file, "wb");
-//			mm_idx_dump(file3, new_mi);
-			mm_idx_dump(file3, mi);
-			fclose(file3);
+			//mm_idx_stat(mi);
 		}
 		mi->index = r->n_parts++;
 	}

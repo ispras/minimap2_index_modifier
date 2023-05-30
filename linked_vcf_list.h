@@ -82,7 +82,7 @@ int ifexists(char* z[], int u, char* v)
 }
 
 
-void calculate_haplotypes(mm_idx_t * mi, bcf_hdr_t *hdr, struct node *window_start_pointer, struct node *current_pointer, unsigned long curr_pos){
+void calculate_haplotypes(mm_idx_t * mi, bcf_hdr_t *hdr, struct node *window_start_pointer, struct node *current_pointer, unsigned long curr_pos, mm128_v *p){
    //Even though vcf uses 1-based indexing (i.e. first base is base 1), htslib internally uses 0-based indexing (i.e. bcf1_t::pos is 0 based).
    //http://wresch.github.io/2014/11/18/process-vcf-file-with-htslib.html
    //so we need use (pos + 1)
@@ -114,12 +114,9 @@ void calculate_haplotypes(mm_idx_t * mi, bcf_hdr_t *hdr, struct node *window_sta
          free(gt_arr);
       }
 
-      //printf("%d ", w_start_pointer->pos+1);
       w_start_pointer = w_start_pointer->next;
       snp_num += 1;
    }
-
-   //printf("\n");
 
 
    char * tmp_array [MAX_HAPLOTYPES];
@@ -162,7 +159,6 @@ void calculate_haplotypes(mm_idx_t * mi, bcf_hdr_t *hdr, struct node *window_sta
 
 
          if(tmp_array[i][local_snp_num] == '1') {
-            //printf("CHR=%s ALT=%s POS=%d ", bcf_hdr_id2name(hdr, local_w_start_pointer->CHR_ID), local_w_start_pointer->ALT, local_w_start_pointer->pos + 1);
             REF_arr[N_SNP] = local_w_start_pointer->REF;
             ALT_arr[N_SNP] = local_w_start_pointer->ALT;
             POS_all[N_SNP] = (unsigned long)(local_w_start_pointer->pos + 1);
@@ -173,15 +169,14 @@ void calculate_haplotypes(mm_idx_t * mi, bcf_hdr_t *hdr, struct node *window_sta
          local_w_start_pointer = local_w_start_pointer->next;
       }
       if (N_SNP > 0) {
-         add_variants(mi, CHR, REF_arr, ALT_arr, POS_all, N_SNP, curr_pos + 1);
-         //printf("-\n");
+         add_variants(mi, CHR, REF_arr, ALT_arr, POS_all, N_SNP, curr_pos + 1, p);
       }
    }
 
    return;
 }
 
-void hadleGTList(mm_idx_t * mi, bcf_hdr_t *hdr){
+void hadleGTList(mm_idx_t * mi, bcf_hdr_t *hdr, mm128_v *p){
    struct node *window_start_pointer = head;
    struct node *current_pointer = head;
    struct node *window_end_pointer = head;
@@ -205,7 +200,7 @@ void hadleGTList(mm_idx_t * mi, bcf_hdr_t *hdr){
       //DONT FORGET TO PASS CURRENT POINTER!!!!
       //CURRENT POINTER CAN BE INACTIVE(!)
       //printf("%d\n", current_pointer->pos+1);
-      calculate_haplotypes(mi, hdr, window_start_pointer, window_end_pointer, current_pointer->pos);
+      calculate_haplotypes(mi, hdr, window_start_pointer, window_end_pointer, current_pointer->pos, p);
 
       current_pointer = current_pointer->next;
       window_end_pointer = current_pointer;
@@ -216,7 +211,7 @@ void hadleGTList(mm_idx_t * mi, bcf_hdr_t *hdr){
       window_start_pointer = window_start_pointer->next;
    }
 
-   calculate_haplotypes(mi, hdr, window_start_pointer, window_end_pointer->next, current_pointer->pos);
+   calculate_haplotypes(mi, hdr, window_start_pointer, window_end_pointer->next, current_pointer->pos, p);
 }
 
 //insertion at the beginning
@@ -277,12 +272,10 @@ void deleteatbegin(){
 }
 
 void deleteList(){
-   printf("DELETE_LIST\n");
    while (head != NULL)
    {
       deleteatbegin();
    }
-   printf("DELETE_LIST2\n");
 }
 
 bool isListEmpty(){

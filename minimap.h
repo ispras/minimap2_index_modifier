@@ -247,7 +247,7 @@ mm_idx_reader_t *mm_idx_reader_open(const char *fn, const mm_idxopt_t *opt, cons
  *
  * @return an index on success; NULL if reaching the end of the input file
  */
-mm_idx_t *mm_idx_reader_read(mm_idx_reader_t *r, int n_threads, char *modified_index_file, char *vcf_with_variants);
+mm_idx_t *mm_idx_reader_read(mm_idx_reader_t *r, int n_threads, char * vcf_with_variants);
 
 /**
  * Destroy/deallocate an index reader
@@ -401,7 +401,7 @@ int mm_idx_bed_junc(const mm_idx_t *mi, int32_t ctg, int32_t st, int32_t en, uin
 
 // deprecated APIs for backward compatibility
 void mm_mapopt_init(mm_mapopt_t *opt);
-mm_idx_t *mm_idx_build(const char *fn, int w, int k, int flag, int n_threads);
+mm_idx_t *mm_idx_build(const char *fn, int w, int k, int flag, int n_threads, char * vcf_with_variants);
 
 #ifdef __cplusplus
 }

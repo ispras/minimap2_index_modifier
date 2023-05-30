@@ -79,7 +79,6 @@ static ko_longopt_t long_options[] = {
 	{ "print-chains",   ko_no_argument,       352 },
 	{ "no-hash-name",   ko_no_argument,       353 },
 	{ "vcf-file-with-variants",   ko_required_argument,       354 },
-	{ "modified-index-file",   ko_required_argument,       355 },
 	{ "help",           ko_no_argument,       'h' },
 	{ "max-intron-len", ko_required_argument, 'G' },
 	{ "version",        ko_no_argument,       'V' },
@@ -129,7 +128,7 @@ int main(int argc, char *argv[])
 	mm_idxopt_t ipt;
 	int i, c, n_threads = 3, n_parts, old_best_n = -1;
 	char *fnw = 0, *rg = 0, *junc_bed = 0, *s, *alt_list = 0;
-	char *vcf_with_variants = 0, *modified_index_file = 0;
+	char *vcf_with_variants = 0;
 	FILE *fp_help = stderr;
 	mm_idx_reader_t *idx_rdr;
 	mm_idx_t *mi;
@@ -241,7 +240,6 @@ int main(int argc, char *argv[])
 		else if (c == 352) mm_dbg_flag |= MM_DBG_PRINT_CHAIN; // --print-chains
 		else if (c == 353) opt.flag |= MM_F_NO_HASH_NAME; // --no-hash-name
 		else if (c == 354) vcf_with_variants = o.arg; // --vcf-file-with-variants
-		else if (c == 355) modified_index_file = o.arg; // --modified-index-file
 		else if (c == 330) {
 			fprintf(stderr, "[WARNING] \033[1;31m --lj-min-ratio has been deprecated.\033[0m\n");
 		} else if (c == 314) { // --frag
@@ -330,7 +328,6 @@ int main(int argc, char *argv[])
 		fprintf(fp_help, "    -I NUM       split index for every ~NUM input bases [4G]\n");
 		fprintf(fp_help, "    -d FILE      dump index to FILE []\n");
 		fprintf(fp_help, "    --vcf-file-with-variants FILE      pass VCF FILE to modify index []\n");
-		fprintf(fp_help, "    --modified-index-file FILE      dump modified index to FILE []\n");
 		fprintf(fp_help, "  Mapping:\n");
 		fprintf(fp_help, "    -f FLOAT     filter out top FLOAT fraction of repetitive minimizers [%g]\n", opt.mid_occ_frac);
 		fprintf(fp_help, "    -g NUM       stop chain enlongation if there are no minimizers in INT-bp [%d]\n", opt.max_gap);
@@ -393,7 +390,7 @@ int main(int argc, char *argv[])
 	}
 	if (opt.best_n == 0 && (opt.flag&MM_F_CIGAR) && mm_verbose >= 2)
 		fprintf(stderr, "[WARNING]\033[1;31m `-N 0' reduces alignment accuracy. Please use --secondary=no to suppress secondary alignments.\033[0m\n");
-	while ((mi = mm_idx_reader_read(idx_rdr, n_threads, modified_index_file, vcf_with_variants)) != 0) {
+	while ((mi = mm_idx_reader_read(idx_rdr, n_threads, vcf_with_variants)) != 0) {
 		int ret;
 		if ((opt.flag & MM_F_CIGAR) && (mi->flag & MM_I_NO_SEQ)) {
 			fprintf(stderr, "[ERROR] the prebuilt index doesn't contain sequences.\n");
