@@ -150,11 +150,20 @@ void mm_sketch(void *km, const char *str, int len, int w, int k, uint32_t rid, i
 		kv_push(mm128_t, km, *p, min);
 }
 
-void read_vcf(mm_idx_t * mi, htsFile *fp, tbx_t *idx, bcf_hdr_t *hdr, bcf1_t *rec, mm128_v *p, char * contig_name)
+void read_vcf(mm_idx_t * mi, char * fname, mm128_v *p, char * contig_name)
 {
     int ret;
 
     kstring_t str = {0,0,0};
+
+    //open vcf file
+    htsFile *fp    = hts_open(fname,"rb");
+
+    //read header
+    bcf_hdr_t *hdr = bcf_hdr_read(fp);
+    bcf1_t *rec    = bcf_init();
+
+    tbx_t *idx = tbx_index_load(fname);
 
     if(!idx) {
         printf("Null index\n");
@@ -192,13 +201,19 @@ void read_vcf(mm_idx_t * mi, htsFile *fp, tbx_t *idx, bcf_hdr_t *hdr, bcf1_t *re
         deleteList();
     }
 
+    bcf_itr_destroy(itr);
+    tbx_destroy(idx);
+    bcf_hdr_destroy(hdr);
 
-    //bcf_itr_destroy(itr);
-    //tbx_destroy(idx2);
+    if ( (ret=hts_close(fp)) )
+    {
+        fprintf(stderr,"hts_close(%s): non-zero status %d\n",fname,ret);
+        exit(ret);
+    }
 }
 
-void mm_idx_manipulate_phased(mm_idx_t * mi,  htsFile *fp, tbx_t *idx, bcf_hdr_t *hdr, bcf1_t *rec, mm128_v *p, char * contig_name) {
-    read_vcf(mi, fp, idx, hdr, rec, p, contig_name);
+void mm_idx_manipulate_phased(mm_idx_t * mi, char * fname, mm128_v *p, char * contig_name) {
+    read_vcf(mi, fname, p, contig_name);
 }
 
 //Array format:

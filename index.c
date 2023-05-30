@@ -363,15 +363,6 @@ static void *worker_pipeline(void *shared, int step, void *in)
     } else if (step == 1) { // step 1: compute sketch
         step_t *s = (step_t*)in;
 
-		//open vcf file
-		htsFile *fp    = hts_open(p->vcf_with_variants,"rb");
-
-		//read header
-		bcf_hdr_t *hdr = bcf_hdr_read(fp);
-		bcf1_t *rec    = bcf_init();
-
-		tbx_t *idx = tbx_index_load(p->vcf_with_variants);
-
 		for (i = 0; i < s->n_seq; ++i) {
 			//printf("SEQ %d %s\n", s->n_seq, s->seq[i].name);
 			mm_bseq1_t *t = &s->seq[i];
@@ -379,21 +370,16 @@ static void *worker_pipeline(void *shared, int step, void *in)
 				mm_sketch(0, t->seq, t->l_seq, p->mi->w, p->mi->k, t->rid, p->mi->flag&MM_I_HPC, &s->a);
 			else if (mm_verbose >= 2)
 				fprintf(stderr, "[WARNING] the length database sequence '%s' is 0\n", t->name);
-			mm_idx_manipulate_phased(p->mi, fp, idx, hdr, rec, &s->a, s->seq[i].name);
+
+			if(p->vcf_with_variants && strcmp(p->vcf_with_variants, "")) {
+				mm_idx_manipulate_phased(p->mi, p->vcf_with_variants, &s->a, s->seq[i].name);
+			}
+
 			free(t->seq); free(t->name);
 		}
 
 		free(s->seq); s->seq = 0;
 
-		tbx_destroy(idx);
-		bcf_hdr_destroy(hdr);
-
-		int ret;
-		if ( (ret=hts_close(fp)) )
-		{
-			fprintf(stderr,"hts_close(%s): non-zero status %d\n",p->vcf_with_variants,ret);
-			exit(ret);
-		}
 
 		return s;
     } else if (step == 2) { // dispatch sketch to buckets
