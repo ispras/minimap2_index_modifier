@@ -228,37 +228,6 @@ static void worker_post(void *g, long i, int tid)
 	// sort by minimizer
 	radix_sort_128x(b->a.a, b->a.a + b->a.n);
 
-    /*
-    // stay only unique
-    mm128_t *tmp = (mm128_t*)calloc(b->a.n, 16);
-    size_t l, q, e;
-    tmp[0].x = b->a.a[0].x;
-    tmp[0].y = b->a.a[0].y;
-    q = 1;
-    for (l = 1; l < b->a.n; l++) {
-        int exist = 0;
-        for (e = 0; e < q; e++) {
-            if (b->a.a[l].y == tmp[e].y && b->a.a[l].x == tmp[e].x) {
-                exist = 1;
-                break;
-            }
-        }
-        if (exist == 0) {
-            tmp[q].x = b->a.a[l].x;
-            tmp[q].y = b->a.a[l].y;
-            q++;
-        }
-    }
-    if (q == b->a.n) {
-        free(tmp);
-    } else {
-        tmp = (mm128_v*) realloc(tmp, sizeof(mm128_v) * q);
-        free(b->a.a);
-        b->a.a = &tmp;
-        b->a.n = q;
-    }*/
-
-
 	// count and preallocate
 	for (j = 1, n = 1, n_keys = 0, b->n = 0; j <= b->a.n; ++j) {
 		if (j == b->a.n || b->a.a[j].x>>8 != b->a.a[j-1].x>>8) {
@@ -411,33 +380,49 @@ static void *worker_pipeline(void *shared, int step, void *in)
 
 		free(s->seq); s->seq = 0;
 
-
+		// sort by minimizer
+		radix_sort_128x(s->a.a, s->a.a + s->a.n);
 
         // stay only unique
+		//#### why 16, sizeof(mm128_v)?
         mm128_t *tmp = (mm128_t*)calloc(s->a.n, 16);
-        size_t l, q, e;
+
+
+		size_t ptr_p, end_s, ptr_tmp, beg_tmp, end_tmp;
         tmp[0].x = s->a.a[0].x;
         tmp[0].y = s->a.a[0].y;
-        q = 1;
-        for (l = 1; l < s->a.n; l++) {
-            int exist = 0;
-            for (e = 0; e < q; e++) {
-                if (s->a.a[l].y == tmp[e].y && s->a.a[l].x == tmp[e].x) {
-                    exist = 1;
-                    break;
-                }
-            }
-            if (exist == 0) {
-                tmp[q].x = s->a.a[l].x;
-                tmp[q].y = s->a.a[l].y;
-                q++;
-            }
-        }
-        tmp = (mm128_v *) realloc(tmp, sizeof(mm128_v) * q);
+		beg_tmp = 0;
+		end_tmp = 1;
 
-        memcpy(s->a.a, tmp, q * 16);
+		for (ptr_p = 1; ptr_p < s->a.n; ptr_p++) {
+			if(s->a.a[ptr_p].x == tmp[beg_tmp].x) {
+				int exist = 0;
+				for (ptr_tmp = beg_tmp; ptr_tmp < end_tmp; ptr_tmp++) {
+					if (s->a.a[ptr_p].y == tmp[ptr_tmp].y && s->a.a[ptr_p].x == tmp[ptr_tmp].x) {
+						exist = 1;
+						break;
+					}
+				}
+				if (exist == 0) {
+					tmp[end_tmp].x = s->a.a[ptr_p].x;
+					tmp[end_tmp].y = s->a.a[ptr_p].y;
+					end_tmp++;
+				}
+			}
+			else {
+				tmp[end_tmp].x = s->a.a[ptr_p].x;
+				tmp[end_tmp].y = s->a.a[ptr_p].y;
+				beg_tmp = end_tmp;
+				end_tmp++;
+			}
+		}
+
+        tmp = (mm128_v *) realloc(tmp, sizeof(mm128_v) * end_tmp);
+
+		//#### do we need realloc s->a.a ?
+        memcpy(s->a.a, tmp, end_tmp * 16);
         free(tmp);
-        s->a.n = q;
+        s->a.n = end_tmp;
 
 		return s;
     } else if (step == 2) { // dispatch sketch to buckets
@@ -802,7 +787,6 @@ mm_idx_t *mm_idx_reader_read(mm_idx_reader_t *r, int n_threads, char * vcf_with_
 	if (mi) {
 		if (r->fp_out) {
 			mm_idx_dump(r->fp_out, mi);
-			//mm_idx_stat(mi);
 		}
 		mi->index = r->n_parts++;
 	}
