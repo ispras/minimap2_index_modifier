@@ -316,7 +316,7 @@ void add_variants(mm_idx_t * mi, char * CHR, char ** REF_arr, char ** ALT_arr, u
     char new_ref_seq[SEQ_CHUNK_NUMBER * 8 + 1];
     memcpy(new_ref_seq, original_ref_seq, SEQ_CHUNK_NUMBER * 8 + 1);
 
-    for (int i = N_SNP -1; i >= 0; i--) {
+    for (int i = N_SNP - 1; i >= 0; i--) {
         //add single SNP
         new_ref_seq[(EXTRA_GAP + SIDE_SIZE + (contig_offset + snp_position - 1) % 8) + (POS_all[i] - snp_position)] = ALT_arr[i][0];// - 'A' + 'a';
     }
@@ -333,7 +333,7 @@ void add_variants(mm_idx_t * mi, char * CHR, char ** REF_arr, char ** ALT_arr, u
     for (int i = 0; i < minimizer_array.n; i++) {
         if (minimizer_array.a[i].y < SIDE_SIZE * 2) continue;
         if (minimizer_array.a[i].y > (SIDE_SIZE + mi->k) * 2 - 1) continue;
-        minimizer_array.a[i].y = (seq_num << 32) + (snp_position - SIDE_SIZE - 1 + minimizer_array.a[i].y / 2) * 2 +
+        minimizer_array.a[i].y = ((uint64_t)seq_num << 32) + (snp_position - SIDE_SIZE - 1 + minimizer_array.a[i].y / 2) * 2 +
                                     (minimizer_array.a[i].y % 2);
 
         kv_push(mm128_t, 0, *p, minimizer_array.a[i]);
