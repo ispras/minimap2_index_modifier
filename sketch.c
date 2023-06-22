@@ -195,7 +195,7 @@ void read_vcf(mm_idx_t * mi, char * fname, mm128_v *p, char * contig_name)
             bcf_empty(rec);
         }
         else {
-            //add_indel(mi, contig_name, rec->d.allele[0], rec->d.allele[1], rec->pos + 1, p);
+            add_indel(mi, contig_name, rec->d.allele[0], rec->d.allele[1], rec->pos + 1, p);
         }
     }
 
