@@ -183,15 +183,20 @@ void read_vcf(mm_idx_t * mi, char * fname, mm128_v *p, char * contig_name)
         bcf_unpack(rec, BCF_UN_STR);
         bcf_unpack(rec, BCF_UN_INFO);
 
-        bcf1_t *rec_tmp = bcf_dup(rec);
+        if(bcf_is_snp(rec)) {
+            bcf1_t *rec_tmp = bcf_dup(rec);
 
-        char * REF = calloc(10, sizeof(char));
-        strcpy(REF, rec->d.allele[0]);
-        char * ALT = calloc(10, sizeof(char));
-        strcpy(ALT, rec->d.allele[1]);
+            char * REF = calloc(10, sizeof(char));
+            strcpy(REF, rec->d.allele[0]);
+            char * ALT = calloc(10, sizeof(char));
+            strcpy(ALT, rec->d.allele[1]);
 
-        insertatbegin((unsigned long)rec_tmp->pos, rec_tmp, rec_tmp->rid, REF, ALT);
-        bcf_empty(rec);
+            insertatbegin((unsigned long)rec_tmp->pos, rec_tmp, rec_tmp->rid, REF, ALT);
+            bcf_empty(rec);
+        }
+        else {
+            //add_indel(mi, contig_name, rec->d.allele[0], rec->d.allele[1], rec->pos + 1, p);
+        }
     }
 
     if(!isListEmpty()){
@@ -214,6 +219,127 @@ void read_vcf(mm_idx_t * mi, char * fname, mm128_v *p, char * contig_name)
 
 void mm_idx_manipulate_phased(mm_idx_t * mi, char * fname, mm128_v *p, char * contig_name) {
     read_vcf(mi, fname, p, contig_name);
+}
+
+//REF - REF (for control)
+//ALT - ALT
+//curr_pos ulong - position
+//CHR - chromosome
+void add_indel(mm_idx_t * mi, char * CHR, char * REF, char * ALT, unsigned long curr_pos, mm128_v *p)
+{
+    const char *contig_name = CHR;
+    const unsigned long position = curr_pos;
+
+    //Find seq
+    uint64_t contig_offset;
+    int seq_num = -1;
+    for (int i = 0; i < mi->n_seq; i++) {
+        if (strcmp(contig_name, mi->seq[i].name) == 0) {
+            contig_offset = mi->seq[i].offset;
+            seq_num = i;
+        }
+    }
+    //обработка ошибки если не найдено
+    if(seq_num == -1) {
+        printf("ERROR Contig %s id not found in reference\n", contig_name);
+        return;
+    }
+
+    int SIDE_SIZE = (mi->k - 1) + mi->w;
+    // Calculate number of chunks:
+    // side chunks: take k-mer size, subtract 1 and add window size
+    // divided by chunk size and multiplied by 2 as it has 2 sides, and one for center
+    int SEQ_CHUNK_NUMBER = SIDE_SIZE / 8 * 2 + 1;
+    // add extra two side chunks if (mi->k - 1 + 10) is not a multiple of 8
+    int EXTRA_GAP = (8 - SIDE_SIZE % 8) % 8;
+    SEQ_CHUNK_NUMBER = (EXTRA_GAP) ? SEQ_CHUNK_NUMBER + 2 : SEQ_CHUNK_NUMBER;
+    uint32_t seq[SEQ_CHUNK_NUMBER];
+
+    for (int i = 0; i < SEQ_CHUNK_NUMBER; i++) {
+        if (
+                // Out of bounds
+                (contig_offset == 0 && (position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i < 0) ||
+                ((contig_offset + position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i) * 8 >= contig_offset + mi->seq[seq_num].len ||
+                ((contig_offset + position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i + 1) * 8 <= contig_offset
+                )
+            seq[i] = 1145324612; // ALL N
+        else {
+            seq[i] = mi->S[(contig_offset + position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i];
+            // At left bound
+            if (((contig_offset + position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i) * 8 < contig_offset &&
+                ((contig_offset + position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i + 1) * 8 > contig_offset) {
+                if (contig_offset % 8 == 0)
+                    seq[i] = 1145324612; // ALL N
+                else {
+                    seq[i] = seq[i] >> (4 * (contig_offset % 8));
+                    for (int j = 0; j < contig_offset % 8; j++)
+                        seq[i] = (seq[i] << 4) + 4;
+                }
+            }
+            // At right bound
+            if (((contig_offset + position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i) * 8 < contig_offset + mi->seq[seq_num].len &&
+                ((contig_offset + position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i + 1) * 8 > contig_offset + mi->seq[seq_num].len) {
+                seq[i] = seq[i] << (4 * (8 - (contig_offset + mi->seq[seq_num].len) % 8));
+                for (int j = 0; j < 8 - (contig_offset + mi->seq[seq_num].len) % 8; j++)
+                    seq[i] = (seq[i] >> 4) | 1073741824; // FIRST N
+            }
+        }
+    }
+
+    char original_ref_seq[SEQ_CHUNK_NUMBER * 8 + 1];
+    original_ref_seq[SEQ_CHUNK_NUMBER * 8] = '\0';
+    for (int i = 0; i < SEQ_CHUNK_NUMBER; i++) {
+        uint32_t tmp_seq = seq[i];
+        for (int j = 0; j < 8; j++) {
+            uint32_t tmp = tmp_seq % 16;
+            switch (tmp) {
+                case 0:
+                    original_ref_seq[i * 8 + j] = 'A';
+                    break;
+                case 1:
+                    original_ref_seq[i * 8 + j] = 'C';
+                    break;
+                case 2:
+                    original_ref_seq[i * 8 + j] = 'G';
+                    break;
+                case 3:
+                    original_ref_seq[i * 8 + j] = 'T';
+                    break;
+                case 4:
+                    original_ref_seq[i * 8 + j] = 'N';
+            }
+            tmp_seq = tmp_seq / 16;
+        }
+    }
+
+    int ref_len = strlen(REF);
+    int alt_len = strlen(ALT);
+
+    if(ref_len == 1 && alt_len > 1) {
+        char * new_ref_seq;
+        new_ref_seq = malloc(sizeof(char) * (SEQ_CHUNK_NUMBER * 8 + 1 + (alt_len - 1)));
+        memcpy(new_ref_seq, original_ref_seq, SEQ_CHUNK_NUMBER * 8 + 1);
+
+        memcpy(new_ref_seq, original_ref_seq, EXTRA_GAP + SIDE_SIZE + (contig_offset + position - 1) % 8);
+
+        new_ref_seq[EXTRA_GAP + SIDE_SIZE + (contig_offset + position - 1) % 8] = '\0';
+        new_ref_seq = strcat(new_ref_seq, ALT);
+        new_ref_seq = strcat(new_ref_seq, &original_ref_seq[EXTRA_GAP + SIDE_SIZE + (contig_offset + position - 1) % 8 + 1]);
+
+        //Finds minimizer in window
+        mm128_v minimizer_array = {0, 0, 0};
+                mm_sketch(0, &new_ref_seq[EXTRA_GAP + (contig_offset + position - 1) % 8], SIDE_SIZE * 2 + 1 + (alt_len - 1), mi->w, mi->k,
+                        0, mi->flag & MM_I_HPC, &minimizer_array);
+
+        for (int i = 0; i < minimizer_array.n; i++) {
+            if (minimizer_array.a[i].y < SIDE_SIZE * 2) continue;
+            if (minimizer_array.a[i].y > (SIDE_SIZE + mi->k) * 2 - 1 + (alt_len - 1) * 2) continue;
+            minimizer_array.a[i].y = ((uint64_t)seq_num << 32) + (position - SIDE_SIZE - 1 + minimizer_array.a[i].y / 2) * 2 +
+                                        (minimizer_array.a[i].y % 2);
+
+            kv_push(mm128_t, 0, *p, minimizer_array.a[i]);
+        }
+    }
 }
 
 //Array format:
