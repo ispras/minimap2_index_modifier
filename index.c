@@ -388,7 +388,7 @@ static void *worker_pipeline(void *shared, int step, void *in)
         mm128_t *tmp = (mm128_t*)calloc(s->a.n, 16);
 
 
-		size_t ptr_p, end_s, ptr_tmp, beg_tmp, end_tmp;
+		size_t ptr_p, ptr_tmp, beg_tmp, end_tmp;
         tmp[0].x = s->a.a[0].x;
         tmp[0].y = s->a.a[0].y;
 		beg_tmp = 0;
@@ -417,7 +417,7 @@ static void *worker_pipeline(void *shared, int step, void *in)
 			}
 		}
 
-        tmp = (mm128_v *) realloc(tmp, sizeof(mm128_v) * end_tmp);
+        tmp = (mm128_t *) realloc(tmp, sizeof(mm128_t) * end_tmp);
 
 		//#### do we need realloc s->a.a ?
         memcpy(s->a.a, tmp, end_tmp * 16);

@@ -39,7 +39,7 @@ void printList(){
 
    //start from the beginning
    while(p != NULL) {
-      printf(" %d ",p->pos);
+      printf(" %lu ",p->pos);
       p = p->next;
    }
    printf("]");
@@ -56,8 +56,8 @@ void printGTList(bcf_hdr_t *hdr){
       int ngt;
       ngt = bcf_get_genotypes(hdr, p->rec, &gt_arr, &ngt_arr);
       if ( ngt > 0 ) {
-         int i, j, nsmpl = bcf_hdr_nsamples(hdr);
-         printf("%s %d REF:%s ALT:%s\n", bcf_hdr_id2name(hdr, p->CHR_ID), p->pos, p->REF, p->ALT);
+         int i, nsmpl = bcf_hdr_nsamples(hdr);
+         printf("%s %lu REF:%s ALT:%s\n", bcf_hdr_id2name(hdr, p->CHR_ID), p->pos, p->REF, p->ALT);
 
          int max_ploidy = ngt/nsmpl;
          for (i=0; i<nsmpl; i++)
@@ -142,7 +142,7 @@ void calculate_haplotypes(mm_idx_t * mi, bcf_hdr_t *hdr, struct node *window_sta
    //POS_all ulong array - positions
    //CHR - chromosome
    //N_SNP - length
-   char * CHR = bcf_hdr_id2name(hdr, window_start_pointer->CHR_ID);
+   const char * CHR = bcf_hdr_id2name(hdr, window_start_pointer->CHR_ID);
 
    for(int i = 0; i<k; i++) {
       //printf("%s\n", tmp_array[i]);
@@ -153,7 +153,7 @@ void calculate_haplotypes(mm_idx_t * mi, bcf_hdr_t *hdr, struct node *window_sta
 
       char * REF_arr[MAX_SNP];
       char * ALT_arr[MAX_SNP];
-      unsigned long * POS_all[MAX_SNP];
+      unsigned long POS_all[MAX_SNP];
 
       while (local_w_start_pointer != local_c_pointer) {
 

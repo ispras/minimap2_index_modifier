@@ -186,9 +186,9 @@ void read_vcf(mm_idx_t * mi, char * fname, mm128_v *p, char * contig_name)
         if(bcf_is_snp(rec)) {
             bcf1_t *rec_tmp = bcf_dup(rec);
 
-            char * REF = calloc(10, sizeof(char));
+            char * REF = (char *)calloc(10, sizeof(char));
             strcpy(REF, rec->d.allele[0]);
-            char * ALT = calloc(10, sizeof(char));
+            char * ALT = (char *)calloc(10, sizeof(char));
             strcpy(ALT, rec->d.allele[1]);
 
             insertatbegin((unsigned long)rec_tmp->pos, rec_tmp, rec_tmp->rid, REF, ALT);
@@ -317,7 +317,7 @@ void add_indel(mm_idx_t * mi, char * CHR, char * REF, char * ALT, unsigned long 
 
     if(ref_len == 1 && alt_len > 1) {
         char * new_ref_seq;
-        new_ref_seq = malloc(sizeof(char) * (SEQ_CHUNK_NUMBER * 8 + 1 + (alt_len - 1)));
+        new_ref_seq = (char*)malloc(sizeof(char) * (SEQ_CHUNK_NUMBER * 8 + 1 + (alt_len - 1)));
         memcpy(new_ref_seq, original_ref_seq, SEQ_CHUNK_NUMBER * 8 + 1);
 
         memcpy(new_ref_seq, original_ref_seq, EXTRA_GAP + SIDE_SIZE + (contig_offset + position - 1) % 8);
@@ -348,7 +348,7 @@ void add_indel(mm_idx_t * mi, char * CHR, char * REF, char * ALT, unsigned long 
 //POS_all ulong array - positions
 //CHR - chromosome
 //N_SNP - length
-void add_variants(mm_idx_t * mi, char * CHR, char ** REF_arr, char ** ALT_arr, unsigned long * POS_all, int N_SNP, unsigned long curr_pos, mm128_v *p)
+void add_variants(mm_idx_t * mi, const char * CHR, char ** REF_arr, char ** ALT_arr, unsigned long * POS_all, int N_SNP, unsigned long curr_pos, mm128_v *p)
 {
     if (N_SNP == 0)
         return;
