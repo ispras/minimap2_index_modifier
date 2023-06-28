@@ -315,7 +315,7 @@ void add_indel(mm_idx_t * mi, char * CHR, char * REF, char * ALT, unsigned long 
     int ref_len = strlen(REF);
     int alt_len = strlen(ALT);
 
-    if(ref_len == 1 && alt_len > 1) {
+    if(ref_len == 1 && alt_len > 1 && alt_len < mi->k) {
         char * new_ref_seq;
         new_ref_seq = (char*)malloc(sizeof(char) * (SEQ_CHUNK_NUMBER * 8 + 1 + (alt_len - 1)));
         memcpy(new_ref_seq, original_ref_seq, SEQ_CHUNK_NUMBER * 8 + 1);
