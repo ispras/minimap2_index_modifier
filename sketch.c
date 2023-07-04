@@ -183,18 +183,14 @@ void read_vcf(mm_idx_t * mi, char * fname, mm128_v *p, char * contig_name)
         bcf_unpack(rec, BCF_UN_STR);
         bcf_unpack(rec, BCF_UN_INFO);
 
-        if (!(bcf_is_snp(rec)) && ((strlen(rec->d.allele[0]) > mi->k) || (strlen(rec->d.allele[1]) > mi->k))) {
-            bcf_empty(rec);
-            continue;
-        }
         bcf1_t *rec_tmp = bcf_dup(rec);
 
         char * REF = (char *)calloc(mi->k + 1, sizeof(char));
-        strcpy(REF, rec->d.allele[0]);
-        REF[strlen(rec->d.allele[0]) + 1] = '\0';
+        strncpy(REF, rec->d.allele[0], mi->k + 1);
+        REF[mi->k + 1] = '\0';
         char * ALT = (char *)calloc(mi->k + 1, sizeof(char));
-        strcpy(ALT, rec->d.allele[1]);
-        ALT[strlen(rec->d.allele[1]) + 1] = '\0';
+        strncpy(ALT, rec->d.allele[1], mi->k + 1);
+        ALT[mi->k + 1] = '\0';
 
         insertatbegin((unsigned long)rec_tmp->pos, rec_tmp, rec_tmp->rid, REF, ALT);
         bcf_empty(rec);
@@ -482,6 +478,9 @@ void add_variants(mm_idx_t * mi, const char * CHR, char ** REF_arr, char ** ALT_
         }
     }
     if ((indel_count == 1) && (POS_all[has_indel] ==  curr_pos)) {
+        if ((strlen(REF_arr[has_indel]) > mi->k) || (strlen(ALT_arr[has_indel]) > mi->k)) {
+            return;
+        }
         if ((strlen(REF_arr[has_indel]) > 1) && (ALT_arr[has_indel] == 1)) { // Delete for insertions. Currently only deletions
             add_indel(mi, CHR, REF_arr[has_indel], ALT_arr[has_indel], curr_pos, p, original_ref_seq);
         }
