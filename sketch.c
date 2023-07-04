@@ -183,20 +183,22 @@ void read_vcf(mm_idx_t * mi, char * fname, mm128_v *p, char * contig_name)
         bcf_unpack(rec, BCF_UN_STR);
         bcf_unpack(rec, BCF_UN_INFO);
 
-        if(bcf_is_snp(rec)) {
-            bcf1_t *rec_tmp = bcf_dup(rec);
-
-            char * REF = (char *)calloc(10, sizeof(char));
-            strcpy(REF, rec->d.allele[0]);
-            char * ALT = (char *)calloc(10, sizeof(char));
-            strcpy(ALT, rec->d.allele[1]);
-
-            insertatbegin((unsigned long)rec_tmp->pos, rec_tmp, rec_tmp->rid, REF, ALT);
+        if (!(bcf_is_snp(rec)) && ((strlen(rec->d.allele[0]) > mi->k) || (strlen(rec->d.allele[1]) > mi->k))) {
             bcf_empty(rec);
+            continue;
         }
-        else {
-            add_indel(mi, contig_name, rec->d.allele[0], rec->d.allele[1], rec->pos + 1, p);
-        }
+        bcf1_t *rec_tmp = bcf_dup(rec);
+
+        char * REF = (char *)calloc(mi->k + 1, sizeof(char));
+        strcpy(REF, rec->d.allele[0]);
+        REF[strlen(rec->d.allele[0]) + 1] = '\0';
+        char * ALT = (char *)calloc(mi->k + 1, sizeof(char));
+        strcpy(ALT, rec->d.allele[1]);
+        ALT[strlen(rec->d.allele[1]) + 1] = '\0';
+
+        insertatbegin((unsigned long)rec_tmp->pos, rec_tmp, rec_tmp->rid, REF, ALT);
+        bcf_empty(rec);
+
     }
 
     if(!isListEmpty()){
@@ -225,7 +227,7 @@ void mm_idx_manipulate_phased(mm_idx_t * mi, char * fname, mm128_v *p, char * co
 //ALT - ALT
 //curr_pos ulong - position
 //CHR - chromosome
-void add_indel(mm_idx_t * mi, char * CHR, char * REF, char * ALT, unsigned long curr_pos, mm128_v *p)
+void add_indel(mm_idx_t * mi, char * CHR, char * REF, char * ALT, unsigned long curr_pos, mm128_v *p, const char * original_ref_seq)
 {
     const char *contig_name = CHR;
     const unsigned long position = curr_pos;
@@ -253,64 +255,6 @@ void add_indel(mm_idx_t * mi, char * CHR, char * REF, char * ALT, unsigned long 
     // add extra two side chunks if (mi->k - 1 + 10) is not a multiple of 8
     int EXTRA_GAP = (8 - SIDE_SIZE % 8) % 8;
     SEQ_CHUNK_NUMBER = (EXTRA_GAP) ? SEQ_CHUNK_NUMBER + 2 : SEQ_CHUNK_NUMBER;
-    uint32_t seq[SEQ_CHUNK_NUMBER];
-
-    for (int i = 0; i < SEQ_CHUNK_NUMBER; i++) {
-        if (
-                // Out of bounds
-                (contig_offset == 0 && (position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i < 0) ||
-                ((contig_offset + position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i) * 8 >= contig_offset + mi->seq[seq_num].len ||
-                ((contig_offset + position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i + 1) * 8 <= contig_offset
-                )
-            seq[i] = 1145324612; // ALL N
-        else {
-            seq[i] = mi->S[(contig_offset + position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i];
-            // At left bound
-            if (((contig_offset + position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i) * 8 < contig_offset &&
-                ((contig_offset + position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i + 1) * 8 > contig_offset) {
-                if (contig_offset % 8 == 0)
-                    seq[i] = 1145324612; // ALL N
-                else {
-                    seq[i] = seq[i] >> (4 * (contig_offset % 8));
-                    for (int j = 0; j < contig_offset % 8; j++)
-                        seq[i] = (seq[i] << 4) + 4;
-                }
-            }
-            // At right bound
-            if (((contig_offset + position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i) * 8 < contig_offset + mi->seq[seq_num].len &&
-                ((contig_offset + position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i + 1) * 8 > contig_offset + mi->seq[seq_num].len) {
-                seq[i] = seq[i] << (4 * (8 - (contig_offset + mi->seq[seq_num].len) % 8));
-                for (int j = 0; j < 8 - (contig_offset + mi->seq[seq_num].len) % 8; j++)
-                    seq[i] = (seq[i] >> 4) | 1073741824; // FIRST N
-            }
-        }
-    }
-
-    char original_ref_seq[SEQ_CHUNK_NUMBER * 8 + 1];
-    original_ref_seq[SEQ_CHUNK_NUMBER * 8] = '\0';
-    for (int i = 0; i < SEQ_CHUNK_NUMBER; i++) {
-        uint32_t tmp_seq = seq[i];
-        for (int j = 0; j < 8; j++) {
-            uint32_t tmp = tmp_seq % 16;
-            switch (tmp) {
-                case 0:
-                    original_ref_seq[i * 8 + j] = 'A';
-                    break;
-                case 1:
-                    original_ref_seq[i * 8 + j] = 'C';
-                    break;
-                case 2:
-                    original_ref_seq[i * 8 + j] = 'G';
-                    break;
-                case 3:
-                    original_ref_seq[i * 8 + j] = 'T';
-                    break;
-                case 4:
-                    original_ref_seq[i * 8 + j] = 'N';
-            }
-            tmp_seq = tmp_seq / 16;
-        }
-    }
 
     int ref_len = strlen(REF);
     int alt_len = strlen(ALT);
@@ -525,9 +469,25 @@ void add_variants(mm_idx_t * mi, const char * CHR, char ** REF_arr, char ** ALT_
     char new_ref_seq[SEQ_CHUNK_NUMBER * 8 + 1];
     memcpy(new_ref_seq, original_ref_seq, SEQ_CHUNK_NUMBER * 8 + 1);
 
+    int has_indel = -1;
+    int indel_count = 0;
     for (int i = N_SNP - 1; i >= 0; i--) {
         //add single SNP
-        new_ref_seq[(EXTRA_GAP + SIDE_SIZE + (contig_offset + snp_position - 1) % 8) + (POS_all[i] - snp_position)] = ALT_arr[i][0];// - 'A' + 'a';
+        if ((strlen(REF_arr[i]) == 1) && (strlen(ALT_arr[i]) == 1)) {
+            new_ref_seq[(EXTRA_GAP + SIDE_SIZE + (contig_offset + snp_position - 1) % 8) +
+                        (POS_all[i] - snp_position)] = ALT_arr[i][0];// - 'A' + 'a';
+        } else {
+            has_indel = i;
+            indel_count++;
+        }
+    }
+    if ((indel_count == 1) && (POS_all[has_indel] ==  curr_pos)) {
+        if ((strlen(REF_arr[has_indel]) > 1) && (ALT_arr[has_indel] == 1)) { // Delete for insertions. Currently only deletions
+            add_indel(mi, CHR, REF_arr[has_indel], ALT_arr[has_indel], curr_pos, p, original_ref_seq);
+        }
+        return;
+    } else if (indel_count > 0) {
+        return;
     }
 
     //Finds minimizer in window
