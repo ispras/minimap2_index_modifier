@@ -79,7 +79,7 @@ static ko_longopt_t long_options[] = {
 	{ "print-chains",   ko_no_argument,       352 },
 	{ "no-hash-name",   ko_no_argument,       353 },
 	{ "vcf-file-with-variants",ko_required_argument,354 },
-    { "parse-haplogroup",ko_no_argument,      355 },
+    { "parse-haplotype",ko_no_argument,      355 },
 	{ "help",           ko_no_argument,       'h' },
 	{ "max-intron-len", ko_required_argument, 'G' },
 	{ "version",        ko_no_argument,       'V' },
@@ -241,7 +241,7 @@ int main(int argc, char *argv[])
 		else if (c == 352) mm_dbg_flag |= MM_DBG_PRINT_CHAIN; // --print-chains
 		else if (c == 353) opt.flag |= MM_F_NO_HASH_NAME; // --no-hash-name
 		else if (c == 354) vcf_with_variants = o.arg; // --vcf-file-with-variants
-        else if (c == 355) ipt.flag |= MM_PARSE_HG;  // --parse-haplogroup
+        else if (c == 355) ipt.flag |= MM_PARSE_HT;  // --parse-haplotype
 		else if (c == 330) {
 			fprintf(stderr, "[WARNING] \033[1;31m --lj-min-ratio has been deprecated.\033[0m\n");
 		} else if (c == 314) { // --frag
@@ -330,7 +330,7 @@ int main(int argc, char *argv[])
 		fprintf(fp_help, "    -I NUM       split index for every ~NUM input bases [4G]\n");
 		fprintf(fp_help, "    -d FILE      dump index to FILE []\n");
 		fprintf(fp_help, "    --vcf-file-with-variants FILE      pass VCF FILE to modify index []\n");
-        fprintf(fp_help, "    --parse-haplogroup parse haplogroups from VCF to generate real SNP combinations, otherwise use all.\n");
+        fprintf(fp_help, "    --parse-haplotype parse haplotypes from VCF to generate real SNP combinations, otherwise use all.\n");
 		fprintf(fp_help, "  Mapping:\n");
 		fprintf(fp_help, "    -f FLOAT     filter out top FLOAT fraction of repetitive minimizers [%g]\n", opt.mid_occ_frac);
 		fprintf(fp_help, "    -g NUM       stop chain enlongation if there are no minimizers in INT-bp [%d]\n", opt.max_gap);

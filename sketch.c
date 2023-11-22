@@ -89,7 +89,7 @@ void mm_sketch(void *km, const char *str, int len, int w, int k, uint32_t rid, i
 	mm128_t buf[256], min = { UINT64_MAX, UINT64_MAX };
 	tiny_queue_t tq;
 
-	assert(len > 0 && (w > 0 && w < 256) && (k > 0 && k <= 28)); // 56 bits for k-mer; could use long k-mers, but 28 enough in practice
+	assert(len > 0 && (w > 0 && w < 256) && (k > 0 && k <= 128)); // 56 bits for k-mer; could use long k-mers, but 28 enough in practice
 	memset(buf, 0xff, w * 16);
 	memset(&tq, 0, sizeof(tiny_queue_t));
 	kv_resize(mm128_t, km, *p, p->n + len/w);
@@ -166,15 +166,15 @@ void read_vcf(mm_idx_t * mi, char * fname, mm128_v *p, char * contig_name)
     tbx_t *idx = tbx_index_load(fname);
 
     if(!idx) {
-        printf("Null index\n");
+        //printf("Null index\n");
         return;
     }
 
-    printf("%s\n", contig_name);
+    //printf("%s\n", contig_name);
     hts_itr_t *itr = tbx_itr_querys(idx, contig_name);
 
     if(!itr) {
-        printf("Null iterator for contig_name %s\n", contig_name);
+        //printf("Null iterator for contig_name %s\n", contig_name);
         return;
     }
 
@@ -184,7 +184,6 @@ void read_vcf(mm_idx_t * mi, char * fname, mm128_v *p, char * contig_name)
         bcf_unpack(rec, BCF_UN_INFO);
 
         bcf1_t *rec_tmp = bcf_dup(rec);
-
         char * REF = (char *)calloc(mi->k + 1, sizeof(char));
         strncpy(REF, rec->d.allele[0], mi->k + 1);
         REF[mi->k + 1] = '\0';
@@ -198,8 +197,8 @@ void read_vcf(mm_idx_t * mi, char * fname, mm128_v *p, char * contig_name)
     }
 
     if(!isListEmpty()){
-        printf("CHR = %s;\n", contig_name);
-        hadleGTList(mi, hdr, p);
+        //printf("CHR = %s;\n", contig_name);
+        handleGTList(mi, hdr, p);
 
         deleteList();
     }
@@ -223,9 +222,11 @@ void mm_idx_manipulate_phased(mm_idx_t * mi, char * fname, mm128_v *p, char * co
 //ALT - ALT
 //curr_pos ulong - position
 //CHR - chromosome
-void add_indel(mm_idx_t * mi, char * CHR, char * REF, char * ALT, unsigned long curr_pos, mm128_v *p, const char * original_ref_seq)
+void add_indel(mm_idx_t * mi, const char * CHR, char * REF, char * ALT, unsigned long curr_pos, unsigned long indel_pos, mm128_v *p, const char * original_ref_seq)
 {
     const char *contig_name = CHR;
+    const unsigned long center_position = curr_pos;
+    //const unsigned long position = indel_pos;
     const unsigned long position = curr_pos;
 
     //Find seq
@@ -237,7 +238,7 @@ void add_indel(mm_idx_t * mi, char * CHR, char * REF, char * ALT, unsigned long 
             seq_num = i;
         }
     }
-    //обработка ошибки если не найдено
+    // Error if no contigs in fasta
     if(seq_num == -1) {
         printf("ERROR Contig %s id not found in reference\n", contig_name);
         return;
@@ -268,13 +269,13 @@ void add_indel(mm_idx_t * mi, char * CHR, char * REF, char * ALT, unsigned long 
 
         //Finds minimizer in window
         mm128_v minimizer_array = {0, 0, 0};
-                mm_sketch(0, &new_ref_seq[EXTRA_GAP + (contig_offset + position - 1) % 8], SIDE_SIZE * 2 + 1 + (alt_len - 1), mi->w, mi->k,
+                mm_sketch(0, &new_ref_seq[EXTRA_GAP + (contig_offset + center_position - 1) % 8], SIDE_SIZE * 2 + 1 + (alt_len - 1), mi->w, mi->k,
                         0, mi->flag & MM_I_HPC, &minimizer_array);
 
         for (int i = 0; i < minimizer_array.n; i++) {
             if (minimizer_array.a[i].y < SIDE_SIZE * 2) continue;
             if (minimizer_array.a[i].y > (SIDE_SIZE + mi->k) * 2 - 1 + (alt_len - 1) * 2) continue;
-            minimizer_array.a[i].y = ((uint64_t)seq_num << 32) + (position - SIDE_SIZE - 1 + minimizer_array.a[i].y / 2) * 2 +
+            minimizer_array.a[i].y = ((uint64_t)seq_num << 32) + (center_position - SIDE_SIZE - 1 + minimizer_array.a[i].y / 2) * 2 +
                                         (minimizer_array.a[i].y % 2);
 
             kv_push(mm128_t, 0, *p, minimizer_array.a[i]);
@@ -348,7 +349,7 @@ void add_indel(mm_idx_t * mi, char * CHR, char * REF, char * ALT, unsigned long 
         
         //Finds minimizer in window
         mm128_v minimizer_array = {0, 0, 0};
-        mm_sketch(0, &new_ref_seq[(contig_offset + position - 1) % 8], SIDE_SIZE * 2 + 1, mi->w, mi->k,
+        mm_sketch(0, &new_ref_seq[(contig_offset + center_position - 1) % 8], SIDE_SIZE * 2 + 1, mi->w, mi->k,
                     0, mi->flag & MM_I_HPC, &minimizer_array);
 
 
@@ -358,7 +359,7 @@ void add_indel(mm_idx_t * mi, char * CHR, char * REF, char * ALT, unsigned long 
         for (int i = 0; i < minimizer_array.n; i++) {
             if (minimizer_array.a[i].y < SIDE_SIZE * 2 + 2) continue; // TODO change 50 to 48 for similarity with SNPS (it will take extra calculation but no changes)
             if (minimizer_array.a[i].y > (SIDE_SIZE + mi->k) * 2 - 1) continue;
-            minimizer_array.a[i].y = ((uint64_t)seq_num << 32) + (position - SIDE_SIZE - 1 + minimizer_array.a[i].y / 2) * 2 +
+            minimizer_array.a[i].y = ((uint64_t)seq_num << 32) + (center_position - SIDE_SIZE - 1 + minimizer_array.a[i].y / 2) * 2 +
                                         (minimizer_array.a[i].y % 2) + (ref_len - 1) * 2;
             kv_push(mm128_t, 0, *p, minimizer_array.a[i]);
         }
@@ -388,7 +389,7 @@ void add_variants(mm_idx_t * mi, const char * CHR, char ** REF_arr, char ** ALT_
             seq_num = i;
         }
     }
-    //обработка ошибки если не найдено
+    //Error if no contigs in fasta
     if(seq_num == -1) {
         printf("ERROR Contig %s id not found in reference\n", snp_contig_name);
         return;
@@ -477,15 +478,21 @@ void add_variants(mm_idx_t * mi, const char * CHR, char ** REF_arr, char ** ALT_
             indel_count++;
         }
     }
-    if ((indel_count == 1) && (POS_all[has_indel] ==  curr_pos)) {
+    if ((indel_count == 1) && (POS_all[has_indel] == curr_pos)) {
         if ((strlen(REF_arr[has_indel]) > mi->k) || (strlen(ALT_arr[has_indel]) > mi->k)) {
             return;
         }
-        if ((strlen(REF_arr[has_indel]) > 1) && (ALT_arr[has_indel] == 1)) { // Delete for insertions. Currently only deletions
-            add_indel(mi, CHR, REF_arr[has_indel], ALT_arr[has_indel], curr_pos, p, original_ref_seq);
-        }
         return;
-    } else if (indel_count > 0) {
+        if ((strlen(REF_arr[has_indel]) > 1) && (strlen(ALT_arr[has_indel]) == 1)) {
+            add_indel(mi, CHR, REF_arr[has_indel], ALT_arr[has_indel], curr_pos,  POS_all[has_indel], p, new_ref_seq);
+            return;
+        }
+        if ((strlen(REF_arr[has_indel]) == 1) && (strlen(ALT_arr[has_indel]) > 1)) {
+            add_indel(mi, CHR, REF_arr[has_indel], ALT_arr[has_indel], curr_pos,  POS_all[has_indel], p, new_ref_seq);
+            return;
+        }
+    }
+    if (indel_count == N_SNP) {
         return;
     }
 
@@ -493,10 +500,6 @@ void add_variants(mm_idx_t * mi, const char * CHR, char ** REF_arr, char ** ALT_
     mm128_v minimizer_array = {0, 0, 0};
             mm_sketch(0, &new_ref_seq[EXTRA_GAP + (contig_offset + snp_position - 1) % 8], SIDE_SIZE * 2 + 1, mi->w, mi->k,
                       0, mi->flag & MM_I_HPC, &minimizer_array);
-
-    // char new_new_ref_seq2[SEQ_CHUNK_NUMBER * 8 + 1];
-    // memcpy(new_new_ref_seq2, &new_ref_seq[EXTRA_GAP + (contig_offset + snp_position - 1) % 8], SIDE_SIZE * 2 + 1);
-    // printf("%s\n", new_new_ref_seq2);
 
     for (int i = 0; i < minimizer_array.n; i++) {
         if (minimizer_array.a[i].y < SIDE_SIZE * 2) continue;
