@@ -4,7 +4,8 @@ Minimap2_index_modifier is a fork of alignment tool [minimap2](https://github.co
 Unlike the original tool, this can use the variants defined in the VCF file when generating the index, for more accurate alignment.
 
 
-Minimap2_index_modifier can be used in the same way as the original minimap2. To create a modified index use additional parameter `--vcf-file-with-variants <vcf-file>`.
+Minimap2_index_modifier can be used in the same way as the original minimap2.  
+To create a modified index use additional parameter `--vcf-file-with-variants <vcf-file>`.
 ```bash
 minimap2 -d index.mmi --vcf-file-with-variants input.vcf.gz reference.fasta
 ```
