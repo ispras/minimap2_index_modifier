@@ -1,6 +1,6 @@
 Minimap2_index_modifier
 =======================
-Minimap2_index_modifier is a fork of alignment tool [Minimap2](https://github.com/lh3/minimap2).
+Minimap2_index_modifier is a fork of alignment tool [minimap2](https://github.com/lh3/minimap2).
 Unlike the original tool, this can use the variants defined in the VCF file when generating the index, for more accurate alignment.
 
 
