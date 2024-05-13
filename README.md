@@ -51,6 +51,3 @@ This [link](https://nextcloud.ispras.ru/index.php/s/wcb9PpZyr8Gb5CC) contains pr
 
 ## Tests
 See [test/tests.md](test/tests.md) for more details.
-
-## Difference from original repo
-All changes regarding the original tool are listed [here](https://github.com/ispras/minimap2_index_modifier/pull/2/files).
