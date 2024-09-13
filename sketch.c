@@ -185,11 +185,9 @@ void read_vcf(mm_idx_t * mi, char * fname, mm128_v *p, char * contig_name)
 
         bcf1_t *rec_tmp = bcf_dup(rec);
         char * REF = (char *)calloc(mi->k + 1, sizeof(char));
-        strncpy(REF, rec->d.allele[0], mi->k + 1);
-        REF[mi->k + 1] = '\0';
+        strncpy(REF, rec->d.allele[0], sizeof(REF));
         char * ALT = (char *)calloc(mi->k + 1, sizeof(char));
-        strncpy(ALT, rec->d.allele[1], mi->k + 1);
-        ALT[mi->k + 1] = '\0';
+        strncpy(ALT, rec->d.allele[1], sizeof(ALT));
 
         insertatbegin((unsigned long)rec_tmp->pos, rec_tmp, rec_tmp->rid, REF, ALT);
         bcf_empty(rec);
