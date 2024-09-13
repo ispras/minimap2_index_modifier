@@ -16,6 +16,7 @@ Use flag `--parse-haplotype` if your VCF contains phased haplotypes.
 * [Installation](#installation)
   * [Compiling from source](#compiling-from-source)
   * [Docker](#docker)
+  * [Dockerhub](#dockerhub)
 * [Pre-built indexes](#pre-built-indexes)
 * [Tests](#tests)
 
@@ -37,6 +38,12 @@ Clone this repository and build a Docker image as follows.
 docker build -t minimap2_index_modifier:2.24 .
 ```
 
+### Dockerhub
+Clone Docker image from Dockerhub.
+```bash
+docker pull egorguga/minimap2_index_modifier:2.24
+```
+
 ## Pre-built indexes
 This [link](https://nextcloud.ispras.ru/index.php/s/wcb9PpZyr8Gb5CC) contains pre-built modified indexes for next references:
 * GRCh38 [(GCA_000001405.15)](https://ftp-trace.ncbi.nlm.nih.gov/giab/ftp/release/references/GRCh38/)
@@ -44,4 +51,3 @@ This [link](https://nextcloud.ispras.ru/index.php/s/wcb9PpZyr8Gb5CC) contains pr
 
 ## Tests
 See [test/tests.md](test/tests.md) for more details.
-
