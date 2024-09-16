@@ -19,6 +19,7 @@ Use flag `--parse-haplotype` if your VCF contains phased haplotypes.
   * [Dockerhub](#dockerhub)
 * [Pre-built indexes](#pre-built-indexes)
 * [Tests](#tests)
+* [Publication](#publication)
 
 ## Installation
 ### Compiling from source
@@ -51,3 +52,7 @@ This [link](https://nextcloud.ispras.ru/index.php/s/wcb9PpZyr8Gb5CC) contains pr
 
 ## Tests
 See [test/tests.md](test/tests.md) for more details.
+
+# Publication
+Guguchkin, E., Kasianov, A., Belenikin, M. et al. Enhancing SNV identification in whole-genome sequencing data through the incorporation of known genetic variants into the minimap2 index. BMC Bioinformatics 25, 238 (2024). https://doi.org/10.1186/s12859-024-05862-y
+  
