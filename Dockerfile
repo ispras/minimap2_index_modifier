@@ -1,6 +1,6 @@
 FROM phusion/baseimage:jammy-1.0.1
 
-ARG HTSLIB_VERSION=1.17
+ARG HTSLIB_VERSION=1.21
 
 ENV TERM=xterm-256color \
     HTSLIB_URL=https://github.com/samtools/htslib/releases/download/${HTSLIB_VERSION}/htslib-${HTSLIB_VERSION}.tar.bz2

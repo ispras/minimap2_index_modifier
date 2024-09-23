@@ -5,9 +5,9 @@ Unlike the original tool, this can use the variants defined in the VCF file when
 
 
 Minimap2_index_modifier can be used in the same way as the original minimap2.  
-To create a modified index use additional parameter `--vcf-file-with-variants <vcf-file>`.
+To create a modified index use additional parameter `--vcf-file <vcf-file>`.
 ```bash
-minimap2 -d index.mmi --vcf-file-with-variants input.vcf.gz reference.fasta
+minimap2 -d index.mmi --vcf-file input.vcf.gz reference.fasta
 ```
 
 Use flag `--parse-haplotype` if your VCF contains phased haplotypes.
@@ -26,7 +26,7 @@ Use flag `--parse-haplotype` if your VCF contains phased haplotypes.
 To compile from source, use this version of tools:
 
 * GCC/G++ 11.4.0+
-* HTSlib v1.17
+* HTSlib v1.21
 
 Command to compile:
 ```bash
@@ -36,13 +36,13 @@ cd minimap2_index_modifier && make
 ### Docker
 Clone this repository and build a Docker image as follows.
 ```bash
-docker build -t minimap2_index_modifier:2.24 .
+docker build -t minimap2_index_modifier:2.28 .
 ```
 
 ### Dockerhub
 Clone Docker image from Dockerhub.
 ```bash
-docker pull egorguga/minimap2_index_modifier:2.24
+docker pull egorguga/minimap2_index_modifier:2.28
 ```
 
 ## Pre-built indexes
