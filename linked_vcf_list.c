@@ -90,12 +90,12 @@ void calculate_haplotypes(mm_idx_t * mi, bcf_hdr_t *hdr, struct node *window_sta
     if (!(mi->flag & MM_PARSE_HT)) {
         int snp_num = 0;
         while (w_start_pointer != c_pointer) {
+            //printf("pos: %lu\n", (unsigned long)(w_start_pointer->pos + 1));
             w_start_pointer = w_start_pointer->next;
             snp_num += 1;
+	    if (snp_num > MAX_SNP) return;
         }
-        if (snp_num == MAX_SNP) {
-            return;
-        }
+	//printf("snpnum: %d\n", snp_num);
         arr_i = (int) pow(2, snp_num);
         arr_j = snp_num + 1;
         gt_array = (char *) calloc(arr_i * arr_j, sizeof(char));
@@ -132,7 +132,7 @@ void calculate_haplotypes(mm_idx_t * mi, bcf_hdr_t *hdr, struct node *window_sta
 
             w_start_pointer = w_start_pointer->next;
             snp_num += 1;
-            if (snp_num > MAX_SNP) {
+            if (snp_num >= MAX_SNP) {
                 free(gt_array);
                 return;
             }
@@ -168,9 +168,10 @@ void calculate_haplotypes(mm_idx_t * mi, bcf_hdr_t *hdr, struct node *window_sta
         char * REF_arr[MAX_SNP];
         char * ALT_arr[MAX_SNP];
         unsigned long POS_all[MAX_SNP];
-
         while (local_w_start_pointer != local_c_pointer) {
             if(gt_array[i * arr_j + local_snp_num] == '1') {
+		//printf("max_snp: %d\n", N_SNP);
+		//printf("poninter->ref %s\n", local_w_start_pointer->REF);
                 REF_arr[N_SNP] = local_w_start_pointer->REF;
                 ALT_arr[N_SNP] = local_w_start_pointer->ALT;
                 POS_all[N_SNP] = (unsigned long)(local_w_start_pointer->pos + 1);

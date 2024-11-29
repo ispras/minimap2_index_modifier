@@ -184,20 +184,24 @@ void read_vcf(mm_idx_t * mi, char * fname, mm128_v *p, char * contig_name)
         bcf_unpack(rec, BCF_UN_INFO);
 
         bcf1_t *rec_tmp = bcf_dup(rec);
-        char * REF = (char *)calloc(mi->k + 1, sizeof(char));
-        strncpy(REF, rec->d.allele[0], sizeof(REF));
-        char * ALT = (char *)calloc(mi->k + 1, sizeof(char));
-        strncpy(ALT, rec->d.allele[1], sizeof(ALT));
+	
+	//printf("rec->d.allele[0]: %s; stlren(it): %d\n", rec->d.allele[0], strlen(rec->d.allele[0]));
+	//printf("rec->d.allele[1]: %s; stlren(it): %d\n", rec->d.allele[1], strlen(rec->d.allele[1]));
+        	
+        char * REF = (char *)calloc(strlen(rec->d.allele[0]) + 1, sizeof(char));
+        strncpy(REF, rec->d.allele[0], strlen(rec->d.allele[0]));
+        char * ALT = (char *)calloc(strlen(rec->d.allele[1]) + 1, sizeof(char));
+        strncpy(ALT, rec->d.allele[1], strlen(rec->d.allele[1]) + 1);
+        
+	//printf("ref: %s, ref len %d, size: %d\n", REF, strlen(REF), sizeof(REF));
+	//printf("alt: %s, alt len %d, size: %d\n", ALT, strlen(ALT), sizeof(ALT));
 
         insertatbegin((unsigned long)rec_tmp->pos, rec_tmp, rec_tmp->rid, REF, ALT);
         bcf_empty(rec);
-
     }
 
     if(!isListEmpty()){
-        //printf("CHR = %s;\n", contig_name);
         handleGTList(mi, hdr, p);
-
         deleteList();
     }
 
@@ -278,7 +282,7 @@ void add_indel(mm_idx_t * mi, const char * CHR, char * REF, char * ALT, unsigned
 
             kv_push(mm128_t, 0, *p, minimizer_array.a[i]);
         }
-    } else if (ref_len > 1 && alt_len == 1 && ref_len < mi->k) {
+    } else if (ref_len > 1 && alt_len == 1) {
         int EXT_CHUNK_COUNT = (ref_len - 2) / 8 + 1;
         char * original_ref_seq_ext = (char*)malloc(sizeof(char) * (8 * EXT_CHUNK_COUNT + 1));
         original_ref_seq_ext[8 * EXT_CHUNK_COUNT] = '\0';
@@ -374,7 +378,6 @@ void add_variants(mm_idx_t * mi, const char * CHR, char ** REF_arr, char ** ALT_
 {
     if (N_SNP == 0)
         return;
-
     const char *snp_contig_name = CHR;
     const unsigned long snp_position = curr_pos;
 
@@ -392,7 +395,6 @@ void add_variants(mm_idx_t * mi, const char * CHR, char ** REF_arr, char ** ALT_
         printf("ERROR Contig %s id not found in reference\n", snp_contig_name);
         return;
     }
-
     int SIDE_SIZE = (mi->k - 1) + mi->w;
     // Calculate number of chunks:
     // side chunks: take k-mer size, subtract 1 and add window size
@@ -433,7 +435,6 @@ void add_variants(mm_idx_t * mi, const char * CHR, char ** REF_arr, char ** ALT_
             }
         }
     }
-
     char original_ref_seq[SEQ_CHUNK_NUMBER * 8 + 1];
     original_ref_seq[SEQ_CHUNK_NUMBER * 8] = '\0';
     for (int i = 0; i < SEQ_CHUNK_NUMBER; i++) {
@@ -460,7 +461,6 @@ void add_variants(mm_idx_t * mi, const char * CHR, char ** REF_arr, char ** ALT_
         }
     }
 
-
     char new_ref_seq[SEQ_CHUNK_NUMBER * 8 + 1];
     memcpy(new_ref_seq, original_ref_seq, SEQ_CHUNK_NUMBER * 8 + 1);
 
@@ -477,23 +477,21 @@ void add_variants(mm_idx_t * mi, const char * CHR, char ** REF_arr, char ** ALT_
         }
     }
     if ((indel_count == 1) && (POS_all[has_indel] == curr_pos)) {
-        if ((strlen(REF_arr[has_indel]) > mi->k) || (strlen(ALT_arr[has_indel]) > mi->k)) {
+        if (strlen(ALT_arr[has_indel]) > mi->k) {
             return;
         }
-        return;
         if ((strlen(REF_arr[has_indel]) > 1) && (strlen(ALT_arr[has_indel]) == 1)) {
             add_indel(mi, CHR, REF_arr[has_indel], ALT_arr[has_indel], curr_pos,  POS_all[has_indel], p, new_ref_seq);
-            return;
+	    return;
         }
         if ((strlen(REF_arr[has_indel]) == 1) && (strlen(ALT_arr[has_indel]) > 1)) {
             add_indel(mi, CHR, REF_arr[has_indel], ALT_arr[has_indel], curr_pos,  POS_all[has_indel], p, new_ref_seq);
-            return;
+	    return;
         }
     }
     if (indel_count == N_SNP) {
         return;
     }
-
     //Finds minimizer in window
     mm128_v minimizer_array = {0, 0, 0};
             mm_sketch(0, &new_ref_seq[EXTRA_GAP + (contig_offset + snp_position - 1) % 8], SIDE_SIZE * 2 + 1, mi->w, mi->k,

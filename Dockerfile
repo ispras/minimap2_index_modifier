@@ -5,8 +5,6 @@ ARG HTSLIB_VERSION=1.17
 ENV TERM=xterm-256color \
     HTSLIB_URL=https://github.com/samtools/htslib/releases/download/${HTSLIB_VERSION}/htslib-${HTSLIB_VERSION}.tar.bz2
 
-COPY . minimap2_index_modifier
-
 # install deps and cleanup apt garbage
 RUN set -eux; \
   apt-get update; \
@@ -15,6 +13,7 @@ RUN set -eux; \
     make \
     autoconf \
     gcc \
+    gdb \
     libcurl4-openssl-dev \
     zlib1g-dev \
     libbz2-dev \
@@ -37,6 +36,8 @@ make; \
 make install; \
 cd ../../; \
 rm -rf temp;
+
+COPY . minimap2_index_modifier
 
 #install minimap2_index_modifier
 RUN set -eux; \
