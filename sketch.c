@@ -227,8 +227,6 @@ void mm_idx_manipulate_phased(mm_idx_t * mi, char * fname, mm128_v *p, char * co
 void add_indel(mm_idx_t * mi, const char * CHR, char * REF, char * ALT, unsigned long curr_pos, unsigned long indel_pos, mm128_v *p, const char * original_ref_seq)
 {
     const char *contig_name = CHR;
-    const unsigned long center_position = curr_pos;
-    //const unsigned long position = indel_pos;
     const unsigned long position = curr_pos;
 
     //Find seq
@@ -238,6 +236,7 @@ void add_indel(mm_idx_t * mi, const char * CHR, char * REF, char * ALT, unsigned
         if (strcmp(contig_name, mi->seq[i].name) == 0) {
             contig_offset = mi->seq[i].offset;
             seq_num = i;
+            break;
         }
     }
     // Error if no contigs in fasta
@@ -246,6 +245,7 @@ void add_indel(mm_idx_t * mi, const char * CHR, char * REF, char * ALT, unsigned
         return;
     }
 
+    int IN_CHUNK_POSITION = (contig_offset + position - 1) % 8;
     int SIDE_SIZE = (mi->k - 1) + mi->w;
     // Calculate number of chunks:
     // side chunks: take k-mer size, subtract 1 and add window size
@@ -261,67 +261,67 @@ void add_indel(mm_idx_t * mi, const char * CHR, char * REF, char * ALT, unsigned
     if(ref_len == 1 && alt_len > 1 && alt_len < mi->k) {
         char * new_ref_seq;
         new_ref_seq = (char*)malloc(sizeof(char) * (SEQ_CHUNK_NUMBER * 8 + 1 + (alt_len - 1)));
+
         memcpy(new_ref_seq, original_ref_seq, SEQ_CHUNK_NUMBER * 8 + 1);
+        memcpy(new_ref_seq, original_ref_seq, EXTRA_GAP + SIDE_SIZE + IN_CHUNK_POSITION);
 
-        memcpy(new_ref_seq, original_ref_seq, EXTRA_GAP + SIDE_SIZE + (contig_offset + position - 1) % 8);
-
-        new_ref_seq[EXTRA_GAP + SIDE_SIZE + (contig_offset + position - 1) % 8] = '\0';
+        new_ref_seq[EXTRA_GAP + SIDE_SIZE + IN_CHUNK_POSITION] = '\0';
         new_ref_seq = strcat(new_ref_seq, ALT);
-        new_ref_seq = strcat(new_ref_seq, &original_ref_seq[EXTRA_GAP + SIDE_SIZE + (contig_offset + position - 1) % 8 + 1]);
+        new_ref_seq = strcat(new_ref_seq, &original_ref_seq[EXTRA_GAP + SIDE_SIZE + IN_CHUNK_POSITION + 1]);
 
         //Finds minimizer in window
         mm128_v minimizer_array = {0, 0, 0};
-                mm_sketch(0, &new_ref_seq[EXTRA_GAP + (contig_offset + center_position - 1) % 8], SIDE_SIZE * 2 + 1 + (alt_len - 1), mi->w, mi->k,
-                        0, mi->flag & MM_I_HPC, &minimizer_array);
+        mm_sketch(0, &new_ref_seq[EXTRA_GAP + IN_CHUNK_POSITION], SIDE_SIZE * 2 + 1 + (alt_len - 1),
+                  mi->w, mi->k, 0, mi->flag & MM_I_HPC, &minimizer_array);
 
         for (int i = 0; i < minimizer_array.n; i++) {
             if (minimizer_array.a[i].y < SIDE_SIZE * 2) continue;
             if (minimizer_array.a[i].y > (SIDE_SIZE + mi->k) * 2 - 1 + (alt_len - 1) * 2) continue;
-            minimizer_array.a[i].y = ((uint64_t)seq_num << 32) + (center_position - SIDE_SIZE - 1 + minimizer_array.a[i].y / 2) * 2 +
-                                        (minimizer_array.a[i].y % 2);
+            minimizer_array.a[i].y = ((uint64_t)seq_num << 32) + (minimizer_array.a[i].y % 2) +
+                                      (position - SIDE_SIZE - 1 + minimizer_array.a[i].y / 2) * 2;
 
             kv_push(mm128_t, 0, *p, minimizer_array.a[i]);
         }
     } else if (ref_len > 1 && alt_len == 1) {
-        int EXT_CHUNK_COUNT = (ref_len - 2) / 8 + 1;
+        int EXT_CHUNK_COUNT = ((ref_len - 2) / 8 > SEQ_CHUNK_NUMBER / 2) ? SEQ_CHUNK_NUMBER / 2 + 1: (ref_len - 2) / 8 + 1;
+
         char * original_ref_seq_ext = (char*)malloc(sizeof(char) * (8 * EXT_CHUNK_COUNT + 1));
         original_ref_seq_ext[8 * EXT_CHUNK_COUNT] = '\0';
+
         for (int i = 0; i < EXT_CHUNK_COUNT; i++) {
-            uint32_t tmp_seq;
-            for (int i = 0; i < EXT_CHUNK_COUNT; i++) {
-                if (
-                    // Out of bounds
-                        (contig_offset == 0 && (position - 1) / 8 + (SEQ_CHUNK_NUMBER / 2) + i + 1 < 0) ||
-                        ((contig_offset + position - 1) / 8 + (SEQ_CHUNK_NUMBER / 2) + i + 1) * 8 >= contig_offset + mi->seq[seq_num].len ||
-                        ((contig_offset + position - 1) / 8 + (SEQ_CHUNK_NUMBER / 2) + i + 2) * 8 <= contig_offset
-                        )
-                    tmp_seq = 1145324612; // ALL N
-                else {
-                    tmp_seq = mi->S[(contig_offset + position - 1) / 8 + (SEQ_CHUNK_NUMBER / 2) + i + 1];
-                    // At left bound
-                    if (((contig_offset + position - 1) / 8 + (SEQ_CHUNK_NUMBER / 2) + i + 1) * 8 < contig_offset &&
-                        ((contig_offset + position - 1) / 8 + (SEQ_CHUNK_NUMBER / 2) + i + 2) * 8 > contig_offset) {
-                        if (contig_offset % 8 == 0)
-                            tmp_seq = 1145324612; // ALL N
-                        else {
-                            tmp_seq = tmp_seq >> (4 * (contig_offset % 8));
-                            for (int j = 0; j < contig_offset % 8; j++)
-                                tmp_seq = (tmp_seq << 4) + 4;
-                        }
+            uint32_t ext_seq;
+            uint32_t current_chunk = (contig_offset + position - 1) / 8 + (SEQ_CHUNK_NUMBER / 2) + i;
+
+            // Out of bounds
+            if ((contig_offset == 0 && (position - 1) / 8 + (SEQ_CHUNK_NUMBER / 2) + i + 1 < 0) ||
+                (current_chunk + 1) * 8 >= contig_offset + mi->seq[seq_num].len || (current_chunk + 2) * 8 <= contig_offset)
+
+                ext_seq = 1145324612; // ALL N
+            else {
+                ext_seq = mi->S[current_chunk + 1];
+                // At left bound
+                if ((current_chunk + 1) * 8 < contig_offset && (current_chunk + 2) * 8 > contig_offset) {
+                    if (contig_offset % 8 == 0)
+                        ext_seq = 1145324612; // ALL N
+                    else {
+                        ext_seq = ext_seq >> (4 * (contig_offset % 8));
+                        for (int j = 0; j < contig_offset % 8; j++)
+                            ext_seq = (ext_seq << 4) + 4;
                     }
-                    // At right bound
-                    if (((contig_offset + position - 1) / 8 + (SEQ_CHUNK_NUMBER / 2) + i + 1) * 8 < contig_offset + mi->seq[seq_num].len &&
-                        ((contig_offset + position - 1) / 8 + (SEQ_CHUNK_NUMBER / 2) + i + 2) * 8 > contig_offset + mi->seq[seq_num].len) {
-                        tmp_seq = tmp_seq << (4 * (8 - (contig_offset + mi->seq[seq_num].len) % 8));
-                        for (int j = 0; j < 8 - (contig_offset + mi->seq[seq_num].len) % 8; j++)
-                            tmp_seq = (tmp_seq >> 4) | 1073741824; // FIRST N
-                    }
+                }
+                // At right bound
+                if ((current_chunk + 1) * 8 < contig_offset + mi->seq[seq_num].len &&
+                    (current_chunk + 2) * 8 > contig_offset + mi->seq[seq_num].len) {
+
+                    ext_seq = ext_seq << (4 * (8 - (contig_offset + mi->seq[seq_num].len) % 8));
+                    for (int j = 0; j < 8 - (contig_offset + mi->seq[seq_num].len) % 8; j++)
+                        ext_seq = (ext_seq >> 4) | 1073741824; // FIRST N
                 }
             }
 
             for (int j = 0; j < 8; j++) {
-                uint32_t tmp = tmp_seq % 16;
-                switch (tmp) {
+                uint32_t ext_nuc = ext_seq % 16;
+                switch (ext_nuc) {
                     case 0:
                         original_ref_seq_ext[i * 8 + j] = 'A';
                         break;
@@ -337,32 +337,40 @@ void add_indel(mm_idx_t * mi, const char * CHR, char * REF, char * ALT, unsigned
                     case 4:
                         original_ref_seq_ext[i * 8 + j] = 'N';
                 }
-                tmp_seq = tmp_seq / 16;
+                ext_seq = ext_seq / 16;
             }
         }
 
         //Create new window
-        char * new_ref_seq = (char*)malloc(sizeof(char) * (SEQ_CHUNK_NUMBER * 8 + 1 - ref_len + 1 + EXT_CHUNK_COUNT * 8));
-        memcpy(new_ref_seq, original_ref_seq, EXTRA_GAP + SIDE_SIZE + (contig_offset + position - 1) % 8);
-        new_ref_seq[EXTRA_GAP + SIDE_SIZE + (contig_offset + position - 1) % 8] = ALT[0];
-        new_ref_seq[EXTRA_GAP + SIDE_SIZE + (contig_offset + position - 1) % 8 + 1] = '\0';
-        new_ref_seq = strcat(new_ref_seq, &original_ref_seq[EXTRA_GAP + SIDE_SIZE + (contig_offset + position - 1) % 8 + ref_len]);
+        int len_case1 = (SEQ_CHUNK_NUMBER + EXT_CHUNK_COUNT) * 8 - ref_len + 2;
+        int len_case2 = SIDE_SIZE + EXT_CHUNK_COUNT * 8 + IN_CHUNK_POSITION + 2;
+        char * new_ref_seq = (char*)malloc(sizeof(char) * ((len_case1 > len_case2) ? len_case1 : len_case2));
+
+        memcpy(new_ref_seq, original_ref_seq, EXTRA_GAP + SIDE_SIZE + IN_CHUNK_POSITION);
+
+        new_ref_seq[EXTRA_GAP + SIDE_SIZE + IN_CHUNK_POSITION] = ALT[0];
+        new_ref_seq[EXTRA_GAP + SIDE_SIZE + IN_CHUNK_POSITION + 1] = '\0';
+
+        if (EXTRA_GAP + SIDE_SIZE + IN_CHUNK_POSITION + ref_len < strlen(original_ref_seq) - 1) {
+            new_ref_seq = strcat(new_ref_seq, &original_ref_seq[EXTRA_GAP + SIDE_SIZE + IN_CHUNK_POSITION + ref_len]);
+        }
         new_ref_seq = strcat(new_ref_seq, original_ref_seq_ext);
-        
+
         //Finds minimizer in window
         mm128_v minimizer_array = {0, 0, 0};
-        mm_sketch(0, &new_ref_seq[(contig_offset + center_position - 1) % 8], SIDE_SIZE * 2 + 1, mi->w, mi->k,
-                    0, mi->flag & MM_I_HPC, &minimizer_array);
-
+        mm_sketch(0, &new_ref_seq[IN_CHUNK_POSITION], SIDE_SIZE * 2 + 1,
+                  mi->w, mi->k, 0, mi->flag & MM_I_HPC, &minimizer_array);
 
         free(original_ref_seq_ext);
         free(new_ref_seq);
 
         for (int i = 0; i < minimizer_array.n; i++) {
-            if (minimizer_array.a[i].y < SIDE_SIZE * 2 + 2) continue; // TODO change 50 to 48 for similarity with SNPS (it will take extra calculation but no changes)
+            if (minimizer_array.a[i].y < SIDE_SIZE * 2 + 2) continue;
             if (minimizer_array.a[i].y > (SIDE_SIZE + mi->k) * 2 - 1) continue;
-            minimizer_array.a[i].y = ((uint64_t)seq_num << 32) + (center_position - SIDE_SIZE - 1 + minimizer_array.a[i].y / 2) * 2 +
-                                        (minimizer_array.a[i].y % 2) + (ref_len - 1) * 2;
+            minimizer_array.a[i].y = ((uint64_t)seq_num << 32) + (minimizer_array.a[i].y % 2) +
+                                      (position - SIDE_SIZE - 1 + minimizer_array.a[i].y / 2) * 2 +
+                                      (ref_len - 1) * 2;
+
             kv_push(mm128_t, 0, *p, minimizer_array.a[i]);
         }
     }
@@ -388,6 +396,7 @@ void add_variants(mm_idx_t * mi, const char * CHR, char ** REF_arr, char ** ALT_
         if (strcmp(snp_contig_name, mi->seq[i].name) == 0) {
             contig_offset = mi->seq[i].offset;
             seq_num = i;
+            break;
         }
     }
     //Error if no contigs in fasta
@@ -395,6 +404,8 @@ void add_variants(mm_idx_t * mi, const char * CHR, char ** REF_arr, char ** ALT_
         printf("ERROR Contig %s id not found in reference\n", snp_contig_name);
         return;
     }
+
+    int IN_CHUNK_POSITION = (contig_offset + snp_position - 1) % 8;
     int SIDE_SIZE = (mi->k - 1) + mi->w;
     // Calculate number of chunks:
     // side chunks: take k-mer size, subtract 1 and add window size
@@ -406,18 +417,17 @@ void add_variants(mm_idx_t * mi, const char * CHR, char ** REF_arr, char ** ALT_
     uint32_t seq[SEQ_CHUNK_NUMBER];
 
     for (int i = 0; i < SEQ_CHUNK_NUMBER; i++) {
-        if (
-                // Out of bounds
-                (contig_offset == 0 && (snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i < 0) ||
-                ((contig_offset + snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i) * 8 >= contig_offset + mi->seq[seq_num].len ||
-                ((contig_offset + snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i + 1) * 8 <= contig_offset
-                )
+        uint32_t current_chunk = (contig_offset + snp_position - 1) / 8 + (SEQ_CHUNK_NUMBER / 2) + i;
+
+        // Out of bounds
+        if ((contig_offset == 0 && (snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i < 0) ||
+            current_chunk * 8 >= contig_offset + mi->seq[seq_num].len || (current_chunk + 1) * 8 <= contig_offset)
+
             seq[i] = 1145324612; // ALL N
         else {
-            seq[i] = mi->S[(contig_offset + snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i];
+            seq[i] = mi->S[current_chunk];
             // At left bound
-            if (((contig_offset + snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i) * 8 < contig_offset &&
-                ((contig_offset + snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i + 1) * 8 > contig_offset) {
+            if (current_chunk * 8 < contig_offset && (current_chunk + 1) * 8 > contig_offset) {
                 if (contig_offset % 8 == 0)
                     seq[i] = 1145324612; // ALL N
                 else {
@@ -427,8 +437,9 @@ void add_variants(mm_idx_t * mi, const char * CHR, char ** REF_arr, char ** ALT_
                 }
             }
             // At right bound
-            if (((contig_offset + snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i) * 8 < contig_offset + mi->seq[seq_num].len &&
-                ((contig_offset + snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i + 1) * 8 > contig_offset + mi->seq[seq_num].len) {
+            if (current_chunk * 8 < contig_offset + mi->seq[seq_num].len &&
+                (current_chunk + 1) * 8 > contig_offset + mi->seq[seq_num].len) {
+
                 seq[i] = seq[i] << (4 * (8 - (contig_offset + mi->seq[seq_num].len) % 8));
                 for (int j = 0; j < 8 - (contig_offset + mi->seq[seq_num].len) % 8; j++)
                     seq[i] = (seq[i] >> 4) | 1073741824; // FIRST N
@@ -438,10 +449,10 @@ void add_variants(mm_idx_t * mi, const char * CHR, char ** REF_arr, char ** ALT_
     char original_ref_seq[SEQ_CHUNK_NUMBER * 8 + 1];
     original_ref_seq[SEQ_CHUNK_NUMBER * 8] = '\0';
     for (int i = 0; i < SEQ_CHUNK_NUMBER; i++) {
-        uint32_t tmp_seq = seq[i];
+        uint32_t nuc_seq = seq[i];
         for (int j = 0; j < 8; j++) {
-            uint32_t tmp = tmp_seq % 16;
-            switch (tmp) {
+            uint32_t nuc = nuc_seq % 16;
+            switch (nuc) {
                 case 0:
                     original_ref_seq[i * 8 + j] = 'A';
                     break;
@@ -457,7 +468,7 @@ void add_variants(mm_idx_t * mi, const char * CHR, char ** REF_arr, char ** ALT_
                 case 4:
                     original_ref_seq[i * 8 + j] = 'N';
             }
-            tmp_seq = tmp_seq / 16;
+            nuc_seq = nuc_seq / 16;
         }
     }
 
@@ -469,7 +480,7 @@ void add_variants(mm_idx_t * mi, const char * CHR, char ** REF_arr, char ** ALT_
     for (int i = N_SNP - 1; i >= 0; i--) {
         //add single SNP
         if ((strlen(REF_arr[i]) == 1) && (strlen(ALT_arr[i]) == 1)) {
-            new_ref_seq[(EXTRA_GAP + SIDE_SIZE + (contig_offset + snp_position - 1) % 8) +
+            new_ref_seq[EXTRA_GAP + SIDE_SIZE + IN_CHUNK_POSITION +
                         (POS_all[i] - snp_position)] = ALT_arr[i][0];// - 'A' + 'a';
         } else {
             has_indel = i;
@@ -494,14 +505,14 @@ void add_variants(mm_idx_t * mi, const char * CHR, char ** REF_arr, char ** ALT_
     }
     //Finds minimizer in window
     mm128_v minimizer_array = {0, 0, 0};
-            mm_sketch(0, &new_ref_seq[EXTRA_GAP + (contig_offset + snp_position - 1) % 8], SIDE_SIZE * 2 + 1, mi->w, mi->k,
-                      0, mi->flag & MM_I_HPC, &minimizer_array);
+    mm_sketch(0, &new_ref_seq[EXTRA_GAP + IN_CHUNK_POSITION], SIDE_SIZE * 2 + 1,
+              mi->w, mi->k, 0, mi->flag & MM_I_HPC, &minimizer_array);
 
     for (int i = 0; i < minimizer_array.n; i++) {
         if (minimizer_array.a[i].y < SIDE_SIZE * 2) continue;
         if (minimizer_array.a[i].y > (SIDE_SIZE + mi->k) * 2 - 1) continue;
-        minimizer_array.a[i].y = ((uint64_t)seq_num << 32) + (snp_position - SIDE_SIZE - 1 + minimizer_array.a[i].y / 2) * 2 +
-                                    (minimizer_array.a[i].y % 2);
+        minimizer_array.a[i].y = ((uint64_t)seq_num << 32) + (minimizer_array.a[i].y % 2) +
+                                  (snp_position - SIDE_SIZE - 1 + minimizer_array.a[i].y / 2) * 2;
 
         kv_push(mm128_t, 0, *p, minimizer_array.a[i]);
     }
