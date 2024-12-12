@@ -343,11 +343,10 @@ void add_indel(mm_idx_t * mi, const char * CHR, char * REF, char * ALT, unsigned
 
         //Create new window
         int len_case1 = (SEQ_CHUNK_NUMBER + EXT_CHUNK_COUNT) * 8 - ref_len + 2;
-        int len_case2 = SIDE_SIZE + EXT_CHUNK_COUNT * 8 + IN_CHUNK_POSITION + 2;
+        int len_case2 = EXTRA_GAP + SIDE_SIZE + EXT_CHUNK_COUNT * 8 + IN_CHUNK_POSITION + 2;
         char * new_ref_seq = (char*)malloc(sizeof(char) * ((len_case1 > len_case2) ? len_case1 : len_case2));
 
         memcpy(new_ref_seq, original_ref_seq, EXTRA_GAP + SIDE_SIZE + IN_CHUNK_POSITION);
-
         new_ref_seq[EXTRA_GAP + SIDE_SIZE + IN_CHUNK_POSITION] = ALT[0];
         new_ref_seq[EXTRA_GAP + SIDE_SIZE + IN_CHUNK_POSITION + 1] = '\0';
 
@@ -417,7 +416,7 @@ void add_variants(mm_idx_t * mi, const char * CHR, char ** REF_arr, char ** ALT_
     uint32_t seq[SEQ_CHUNK_NUMBER];
 
     for (int i = 0; i < SEQ_CHUNK_NUMBER; i++) {
-        uint32_t current_chunk = (contig_offset + snp_position - 1) / 8 + (SEQ_CHUNK_NUMBER / 2) + i;
+        uint32_t current_chunk = (contig_offset + snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i;
 
         // Out of bounds
         if ((contig_offset == 0 && (snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i < 0) ||
