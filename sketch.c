@@ -150,70 +150,124 @@ void mm_sketch(void *km, const char *str, int len, int w, int k, uint32_t rid, i
 		kv_push(mm128_t, km, *p, min);
 }
 
-void read_vcf(mm_idx_t * mi, char * fname, mm128_v *p, char * contig_name)
-{
+static void process_vcf_record(bcf1_t *rec, bcf_hdr_t *hdr, mm_idx_t *mi, mm128_v *p) {
+    // Duplicate the record
+    bcf1_t *rec_tmp = bcf_dup(rec);
+    if (!rec_tmp) {
+        fprintf(stderr, "ERROR: Failed to duplicate VCF record\n");
+        return;
+    }
+
+    // Allocate memory and copy REF allele
+    char *REF = (char *)calloc(strlen(rec->d.allele[0]) + 1, sizeof(char));
+    if (!REF) {
+        fprintf(stderr, "ERROR: Memory allocation failed for REF\n");
+        bcf_destroy(rec_tmp);
+        return;
+    }
+    strncpy(REF, rec->d.allele[0], strlen(rec->d.allele[0]));
+    REF[strlen(rec->d.allele[0])] = '\0';
+
+    // Allocate memory and copy ALT allele (assumes only one ALT allele)
+    char *ALT = NULL;
+    if (rec->n_allele > 1) {
+        ALT = (char *)calloc(strlen(rec->d.allele[1]) + 1, sizeof(char));
+        if (!ALT) {
+            fprintf(stderr, "ERROR: Memory allocation failed for ALT\n");
+            free(REF);
+            bcf_destroy(rec_tmp);
+            return;
+        }
+        strncpy(ALT, rec->d.allele[1], strlen(rec->d.allele[1]));
+        ALT[strlen(rec->d.allele[1])] = '\0';
+    }
+    else {
+        // If no ALT allele is present, skip this record
+        free(REF);
+        bcf_destroy(rec_tmp);
+        return;
+    }
+
+    // Insert the record into the linked list for later processing
+    insertatbegin((unsigned long)rec_tmp->pos, rec_tmp, rec_tmp->rid, REF, ALT);
+}
+
+void read_vcf(mm_idx_t *mi, char *fname, mm128_v *p, char *contig_name) {
     int ret;
+    kstring_t str = {0, 0, 0};
 
-    kstring_t str = {0,0,0};
+    // Open the VCF file
+    htsFile *fp = hts_open(fname, "rb");
+    if (!fp) {
+        fprintf(stderr, "ERROR: Failed to open VCF file %s\n", fname);
+        return;
+    }
 
-    //open vcf file
-    htsFile *fp    = hts_open(fname,"rb");
-
-    //read header
+    // Read the VCF header
     bcf_hdr_t *hdr = bcf_hdr_read(fp);
-    bcf1_t *rec    = bcf_init();
+    if (!hdr) {
+        fprintf(stderr, "ERROR: Failed to read header from VCF file %s\n", fname);
+        hts_close(fp);
+        return;
+    }
 
+    // Load the index for the VCF file
     tbx_t *idx = tbx_index_load(fname);
-
-    if(!idx) {
-        //printf("Null index\n");
+    if (!idx) {
+        // Index not found; log a warning and proceed if possible
+        fprintf(stderr, "WARNING: Index not found for VCF file %s\n", fname);
+        bcf_hdr_destroy(hdr);
+        hts_close(fp);
         return;
     }
 
-    //printf("%s\n", contig_name);
+    // Create an iterator for the specified contig
     hts_itr_t *itr = tbx_itr_querys(idx, contig_name);
-
-    if(!itr) {
-        //printf("Null iterator for contig_name %s\n", contig_name);
+    if (!itr) {
+        fprintf(stderr, "WARNING: No records found for contig %s in VCF file %s\n", contig_name, fname);
+        tbx_destroy(idx);
+        bcf_hdr_destroy(hdr);
+        hts_close(fp);
         return;
     }
 
+    // Initialize a VCF record structure
+    bcf1_t *rec = bcf_init();
+    if (!rec) {
+        fprintf(stderr, "ERROR: Failed to initialize VCF record structure\n");
+        tbx_itr_destroy(itr);
+        tbx_destroy(idx);
+        bcf_hdr_destroy(hdr);
+        hts_close(fp);
+        return;
+    }
+
+    // Iterate through each record in the specified contig
     while ((ret = tbx_itr_next(fp, idx, itr, &str)) > 0) {
+        // Parse the VCF record
         vcf_parse(&str, hdr, rec);
         bcf_unpack(rec, BCF_UN_STR);
         bcf_unpack(rec, BCF_UN_INFO);
 
-        bcf1_t *rec_tmp = bcf_dup(rec);
-	
-	//printf("rec->d.allele[0]: %s; stlren(it): %d\n", rec->d.allele[0], strlen(rec->d.allele[0]));
-	//printf("rec->d.allele[1]: %s; stlren(it): %d\n", rec->d.allele[1], strlen(rec->d.allele[1]));
-        	
-        char * REF = (char *)calloc(strlen(rec->d.allele[0]) + 1, sizeof(char));
-        strncpy(REF, rec->d.allele[0], strlen(rec->d.allele[0]));
-        char * ALT = (char *)calloc(strlen(rec->d.allele[1]) + 1, sizeof(char));
-        strncpy(ALT, rec->d.allele[1], strlen(rec->d.allele[1]) + 1);
-        
-	//printf("ref: %s, ref len %d, size: %d\n", REF, strlen(REF), sizeof(REF));
-	//printf("alt: %s, alt len %d, size: %d\n", ALT, strlen(ALT), sizeof(ALT));
+        // Process the record to extract REF and ALT alleles
+        process_vcf_record(rec, hdr, mi, p);
 
-        insertatbegin((unsigned long)rec_tmp->pos, rec_tmp, rec_tmp->rid, REF, ALT);
+        // Reset the record for the next iteration
         bcf_empty(rec);
     }
 
-    if(!isListEmpty()){
+    // Process the linked list of variants if not empty
+    if (!isListEmpty()) {
         handleGTList(mi, hdr, p);
         deleteList();
     }
 
+    // Clean up
+    bcf_destroy(rec);
     bcf_itr_destroy(itr);
     tbx_destroy(idx);
     bcf_hdr_destroy(hdr);
-
-    if ( (ret=hts_close(fp)) )
-    {
-        fprintf(stderr,"hts_close(%s): non-zero status %d\n",fname,ret);
-        exit(ret);
-    }
+    hts_close(fp);
 }
 
 void mm_idx_manipulate_phased(mm_idx_t * mi, char * fname, mm128_v *p, char * contig_name) {
@@ -290,7 +344,7 @@ void add_indel(mm_idx_t * mi, const char * CHR, char * REF, char * ALT, unsigned
 
         for (int i = 0; i < EXT_CHUNK_COUNT; i++) {
             uint32_t ext_seq;
-            uint32_t current_chunk = (contig_offset + position - 1) / 8 + (SEQ_CHUNK_NUMBER / 2) + i;
+            uint32_t current_chunk = (contig_offset + position - 1) / 8 + (SEQ_CHUNK_NUMBER / 2) + i; // "+"
 
             // Out of bounds
             if ((contig_offset == 0 && (position - 1) / 8 + (SEQ_CHUNK_NUMBER / 2) + i + 1 < 0) ||
@@ -322,20 +376,11 @@ void add_indel(mm_idx_t * mi, const char * CHR, char * REF, char * ALT, unsigned
             for (int j = 0; j < 8; j++) {
                 uint32_t ext_nuc = ext_seq % 16;
                 switch (ext_nuc) {
-                    case 0:
-                        original_ref_seq_ext[i * 8 + j] = 'A';
-                        break;
-                    case 1:
-                        original_ref_seq_ext[i * 8 + j] = 'C';
-                        break;
-                    case 2:
-                        original_ref_seq_ext[i * 8 + j] = 'G';
-                        break;
-                    case 3:
-                        original_ref_seq_ext[i * 8 + j] = 'T';
-                        break;
-                    case 4:
-                        original_ref_seq_ext[i * 8 + j] = 'N';
+                    case 0:  original_ref_seq_ext[i * 8 + j] = 'A'; break;
+                    case 1:  original_ref_seq_ext[i * 8 + j] = 'C'; break;
+                    case 2:  original_ref_seq_ext[i * 8 + j] = 'G'; break;
+                    case 3:  original_ref_seq_ext[i * 8 + j] = 'T'; break;
+                    default: original_ref_seq_ext[i * 8 + j] = 'N'; break;
                 }
                 ext_seq = ext_seq / 16;
             }
@@ -416,7 +461,7 @@ void add_variants(mm_idx_t * mi, const char * CHR, char ** REF_arr, char ** ALT_
     uint32_t seq[SEQ_CHUNK_NUMBER];
 
     for (int i = 0; i < SEQ_CHUNK_NUMBER; i++) {
-        uint32_t current_chunk = (contig_offset + snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i;
+        uint32_t current_chunk = (contig_offset + snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i; // "-"
 
         // Out of bounds
         if ((contig_offset == 0 && (snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i < 0) ||
@@ -445,6 +490,7 @@ void add_variants(mm_idx_t * mi, const char * CHR, char ** REF_arr, char ** ALT_
             }
         }
     }
+
     char original_ref_seq[SEQ_CHUNK_NUMBER * 8 + 1];
     original_ref_seq[SEQ_CHUNK_NUMBER * 8] = '\0';
     for (int i = 0; i < SEQ_CHUNK_NUMBER; i++) {
@@ -452,20 +498,11 @@ void add_variants(mm_idx_t * mi, const char * CHR, char ** REF_arr, char ** ALT_
         for (int j = 0; j < 8; j++) {
             uint32_t nuc = nuc_seq % 16;
             switch (nuc) {
-                case 0:
-                    original_ref_seq[i * 8 + j] = 'A';
-                    break;
-                case 1:
-                    original_ref_seq[i * 8 + j] = 'C';
-                    break;
-                case 2:
-                    original_ref_seq[i * 8 + j] = 'G';
-                    break;
-                case 3:
-                    original_ref_seq[i * 8 + j] = 'T';
-                    break;
-                case 4:
-                    original_ref_seq[i * 8 + j] = 'N';
+                case 0:  original_ref_seq[i * 8 + j] = 'A'; break;
+                case 1:  original_ref_seq[i * 8 + j] = 'C'; break;
+                case 2:  original_ref_seq[i * 8 + j] = 'G'; break;
+                case 3:  original_ref_seq[i * 8 + j] = 'T'; break;
+                default: original_ref_seq[i * 8 + j] = 'N'; break;
             }
             nuc_seq = nuc_seq / 16;
         }
