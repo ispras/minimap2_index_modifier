@@ -418,8 +418,55 @@ static void mm_set_inv_mapq(void *km, int n_regs, mm_reg1_t *regs)
 	kfree(km, aux);
 }
 
-void mm_set_mapq(void *km, int n_regs, mm_reg1_t *regs, int min_chain_sc, int match_sc, int rep_len, int is_sr)
+int genome_and_contig_exist(char **arr) {
+	//
+	// the chromosome name pattern: chr[1..22] | chr[1..22]_*
+	//
+	fprintf(stderr, "debug: genome_and_contig_exist\n");
+
+	if (!arr) {
+		fprintf(stderr, "debug: ---arr is NULL\n");
+		return 0;
+	}
+	
+	int chr_found[22] = { 0 };
+	int chr_contig_found[22] = { 0 };
+
+	for (int i = 0; arr[i] != NULL; i++) {
+		for (int n = 1; n <= 22; n++) {
+			char chr[50];
+			sprintf(chr, "chr%d", n);
+
+			if (strcmp(arr[i], chr) == 0) {
+				chr_found[n - 1] = 1;
+				fprintf(stderr, "debug: ---found chromosome %d\n", n);
+			}
+			else if (strncmp(arr[i], chr, strlen(chr)) == 0 && arr[i][strlen(chr)] == '_') {
+				if (strlen(arr[i]) > strlen(chr) + 1) {
+					chr_contig_found[n - 1] = 1;
+					fprintf(stderr, "debug: ---found contig for chromosome %d\n", n);
+				}
+			}
+		}
+	}
+
+	for (int i = 0; i < 22; i++) {
+		if (chr_found[i] && chr_contig_found[i]) {
+			return 1;
+		}
+	}
+
+	fprintf(stderr, "debug: ---no matching chromosome and contig found\n");
+	return 0;
+}
+
+void mm_set_mapq(void *km, int n_regs, mm_reg1_t *regs, int min_chain_sc, int match_sc, int rep_len, int is_sr, char **chromosome_names)
 {
+	int has_matching_chr = 0;
+    if (chromosome_names != NULL) {
+        has_matching_chr = genome_and_contig_exist(chromosome_names);
+    }
+
 	static const float q_coef = 40.0f;
 	int64_t sum_sc = 0;
 	float uniq_ratio;
@@ -431,6 +478,8 @@ void mm_set_mapq(void *km, int n_regs, mm_reg1_t *regs, int min_chain_sc, int ma
 	uniq_ratio = (float)sum_sc / (sum_sc + rep_len);
 	for (i = 0; i < n_regs; ++i) {
 		mm_reg1_t *r = &regs[i];
+		// fprintf(stderr, "id = %d\trid = %d\tqs = %d\tqe = %d\nrs = %d\tre = %d\ndp_max0 = %d\tdp_max = %d\tdp_max2 = %d\n\n", 
+        //         r->id, r->rid, r->qs, r->qe, r->rs, r->re, r->p->dp_max0, r->p->dp_max, r->p->dp_max2);
 		if (r->inv) {
 			r->mapq = 0;
 		} else if (r->parent == r->id) {
@@ -460,6 +509,9 @@ void mm_set_mapq(void *km, int n_regs, mm_reg1_t *regs, int min_chain_sc, int ma
 			mapq = mapq > 0? mapq : 0;
 			r->mapq = mapq < 60? mapq : 60;
 			if (r->p && r->p->dp_max > r->p->dp_max2 && r->mapq == 0) r->mapq = 1;
+			if (has_matching_chr) {
+				r->mapq = 60;
+			}
 		} else r->mapq = 0;
 	}
 	mm_set_inv_mapq(km, n_regs, regs);

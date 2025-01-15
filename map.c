@@ -224,6 +224,118 @@ static mm_reg1_t *align_regs(const mm_mapopt_t *opt, const mm_idx_t *mi, void *k
 	return regs;
 }
 
+// collecting unique chromosome names found for the current read
+char **collect_seed_chromosome_names(const mm_idx_t *mi, int n_a, mm128_t *a)
+{
+	int max_chromosomes = 32;
+	int n_chromosomes = 0;
+	char **chromosome_names = CALLOC(char*, max_chromosomes);
+
+	for (int i = 0; i < max_chromosomes; ++i) {
+		chromosome_names[i] = NULL;
+	}
+
+	for (int i = 0; i < n_a; ++i) {
+		const char* curr_name = mi->seq[a[i].x<<1>>33].name;
+		int exists = 0;
+
+		for (int j = 0; j < n_chromosomes; ++j) {
+			if (chromosome_names[j] && strcmp(chromosome_names[j], curr_name) == 0) {
+				exists = 1;
+				break;
+			}
+		}
+
+		if (!exists) {
+			if (n_chromosomes >= max_chromosomes) {
+				max_chromosomes *= 2;
+				chromosome_names = (char**)realloc(chromosome_names, max_chromosomes * sizeof(char*));
+				for (int j = n_chromosomes; j < max_chromosomes; ++j) {
+					chromosome_names[j] = NULL;
+				}
+			}
+			chromosome_names[n_chromosomes] = strdup(curr_name);
+			n_chromosomes++;
+		}
+	}
+
+	return chromosome_names;
+}
+
+void free_chromosome_names(char **chromosome_names, int max_chromosomes) {
+    for (int i = 0; i < max_chromosomes; i++) {
+        if (chromosome_names[i] != NULL) {
+            free(chromosome_names[i]);
+        }
+    }
+    free(chromosome_names);
+}
+
+typedef struct {
+    char *name;           // chromosome name
+    uint32_t len;         // chromosome length
+    int32_t rid;          // chromosome id
+    int32_t n_hits;       // number of hits to the current chromosome
+    int32_t start_pos;    // start position of the first hit
+    int32_t end_pos;      // end position of the last hit
+} chromosome_info_t;
+
+// collecting unique chromosome info found for the current read
+chromosome_info_t *collect_seed_chromosome_info(const mm_idx_t *mi, int n_a, mm128_t *a, int *n_chromosomes) 
+{
+    int max_chroms = 32;
+    *n_chromosomes = 0;
+    chromosome_info_t *chr_info = (chromosome_info_t*)calloc(max_chroms, sizeof(chromosome_info_t));
+
+    for (int i = 0; i < n_a; ++i) {
+        uint32_t rid = a[i].x<<1>>33;
+        int exists = 0;
+        int32_t pos = (int32_t)a[i].x;
+
+        for (int j = 0; j < *n_chromosomes; ++j) {
+            if (rid == chr_info[j].rid) {
+                exists = 1;
+                chr_info[j].n_hits++;
+                
+                if (pos < chr_info[j].start_pos) chr_info[j].start_pos = pos;
+                if (pos > chr_info[j].end_pos) chr_info[j].end_pos = pos;
+                
+                break;
+            }
+        }
+
+        if (!exists) {
+            if (*n_chromosomes == max_chroms) {
+                max_chroms *= 2;
+                chr_info = (chromosome_info_t*)realloc(chr_info, max_chroms * sizeof(chromosome_info_t));
+            }
+
+            int idx = *n_chromosomes;
+            chr_info[idx].name = strdup(mi->seq[rid].name);
+            chr_info[idx].len = mi->seq[rid].len;
+            chr_info[idx].rid = rid;
+            chr_info[idx].n_hits = 1;
+            chr_info[idx].start_pos = pos;
+            chr_info[idx].end_pos = pos;
+            (*n_chromosomes)++;
+        }
+    }
+
+    if (*n_chromosomes < max_chroms) {
+        chr_info = (chromosome_info_t*)realloc(chr_info, *n_chromosomes * sizeof(chromosome_info_t));
+    }
+
+    return chr_info;
+}
+
+// free chromosome_info
+void free_chromosome_info(chromosome_info_t *chr_info, int n_chromosomes) {
+    for (int i = 0; i < n_chromosomes; i++) {
+        free(chr_info[i].name);
+    }
+    free(chr_info);
+}
+
 void mm_map_frag(const mm_idx_t *mi, int n_segs, const int *qlens, const char **seqs, int *n_regs, mm_reg1_t **regs, mm_tbuf_t *b, const mm_mapopt_t *opt, const char *qname)
 {
 	int i, j, rep_len, qlen_sum, n_regs0, n_mini_pos;
@@ -335,10 +447,19 @@ void mm_map_frag(const mm_idx_t *mi, int n_segs, const int *qlens, const char **
 		n_regs0 = mm_filter_strand_retained(n_regs0, regs0);
 	}
 
+	fprintf(stderr, "\ndebug: collect_seed_chromosome_names\n");
+	char **chromosome_names = collect_seed_chromosome_names(mi, n_a, a);
+	fprintf(stderr, "debug: ---qname = %s\n", qname);
+	for (int i = 0; i < n_a; i++) {
+		if (chromosome_names[i] != NULL) {
+			fprintf(stderr, "debug: ---chromosome_names[%d] = %s\n", i, chromosome_names[i]);
+		}
+	}
+
 	if (n_segs == 1) { // uni-segment
 		regs0 = align_regs(opt, mi, b->km, qlens[0], seqs[0], &n_regs0, regs0, a);
 		regs0 = (mm_reg1_t*)realloc(regs0, sizeof(*regs0) * n_regs0);
-		mm_set_mapq(b->km, n_regs0, regs0, opt->min_chain_score, opt->a, rep_len, is_sr);
+		mm_set_mapq(b->km, n_regs0, regs0, opt->min_chain_score, opt->a, rep_len, is_sr, chromosome_names);
 		n_regs[0] = n_regs0, regs[0] = regs0;
 	} else { // multi-segment
 		mm_seg_t *seg;
@@ -347,12 +468,14 @@ void mm_map_frag(const mm_idx_t *mi, int n_segs, const int *qlens, const char **
 		for (i = 0; i < n_segs; ++i) {
 			mm_set_parent(b->km, opt->mask_level, opt->mask_len, n_regs[i], regs[i], opt->a * 2 + opt->b, opt->flag&MM_F_HARD_MLEVEL, opt->alt_drop); // update mm_reg1_t::parent
 			regs[i] = align_regs(opt, mi, b->km, qlens[i], seqs[i], &n_regs[i], regs[i], seg[i].a);
-			mm_set_mapq(b->km, n_regs[i], regs[i], opt->min_chain_score, opt->a, rep_len, is_sr);
+			mm_set_mapq(b->km, n_regs[i], regs[i], opt->min_chain_score, opt->a, rep_len, is_sr, chromosome_names);
 		}
 		mm_seg_free(b->km, n_segs, seg);
 		if (n_segs == 2 && opt->pe_ori >= 0 && (opt->flag&MM_F_CIGAR))
 			mm_pair(b->km, max_chain_gap_ref, opt->pe_bonus, opt->a * 2 + opt->b, opt->a, qlens, n_regs, regs); // pairing
 	}
+
+	free_chromosome_names(chromosome_names, 32);
 
 	kfree(b->km, mv.a);
 	kfree(b->km, a);
@@ -509,7 +632,7 @@ static void merge_hits(step_t *s)
 				mm_select_sub(km, opt->pri_ratio, s->p->mi->k*2, opt->best_n, 0, opt->max_gap * 0.8, &s->n_reg[k], s->reg[k]);
 				mm_set_sam_pri(s->n_reg[k], s->reg[k]);
 			}
-			mm_set_mapq(km, s->n_reg[k], s->reg[k], opt->min_chain_score, opt->a, rep_len, !!(opt->flag & MM_F_SR));
+			mm_set_mapq(km, s->n_reg[k], s->reg[k], opt->min_chain_score, opt->a, rep_len, !!(opt->flag & MM_F_SR), NULL);
 		}
 		if (s->n_seg[f] == 2 && opt->pe_ori >= 0 && (opt->flag&MM_F_CIGAR))
 			mm_pair(km, frag_gap_part[0], opt->pe_bonus, opt->a * 2 + opt->b, opt->a, qlens, &s->n_reg[k0], &s->reg[k0]);
