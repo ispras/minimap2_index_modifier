@@ -79,8 +79,6 @@ static ko_longopt_t long_options[] = {
 	{ "secondary-seq",  ko_no_argument,       354 },
 	{ "ds",             ko_no_argument,       355 },
 	{ "rmq-inner",      ko_required_argument, 356 },
-	{ "spsc",           ko_required_argument, 357 },
-	{ "junc-pen",       ko_required_argument, 358 },
 	{ "dbg-seed-occ",   ko_no_argument,       501 },
 	{ "help",           ko_no_argument,       'h' },
 	{ "max-intron-len", ko_required_argument, 'G' },
@@ -130,7 +128,7 @@ int main(int argc, char *argv[])
 	mm_mapopt_t opt;
 	mm_idxopt_t ipt;
 	int i, c, n_threads = 3, n_parts, old_best_n = -1;
-	char *fnw = 0, *rg = 0, *junc_bed = 0, *fn_spsc = 0, *s, *alt_list = 0;
+	char *fnw = 0, *rg = 0, *junc_bed = 0, *s, *alt_list = 0;
 	FILE *fp_help = stderr;
 	mm_idx_reader_t *idx_rdr;
 	mm_idx_t *mi;
@@ -236,7 +234,6 @@ int main(int argc, char *argv[])
 		else if (c == 338) opt.max_qlen = mm_parse_num(o.arg); // --max-qlen
 		else if (c == 340) junc_bed = o.arg; // --junc-bed
 		else if (c == 341) opt.junc_bonus = atoi(o.arg); // --junc-bonus
-		else if (c == 358) opt.junc_pen = atoi(o.arg); // --junc-pen
 		else if (c == 342) opt.flag |= MM_F_SAM_HIT_ONLY; // --sam-hit-only
 		else if (c == 343) opt.chain_gap_scale = atof(o.arg); // --chain-gap-scale
 		else if (c == 351) opt.chain_skip_scale = atof(o.arg); // --chain-skip-scale
@@ -251,7 +248,6 @@ int main(int argc, char *argv[])
 		else if (c == 354) opt.flag |= MM_F_SECONDARY_SEQ; // --secondary-seq
 		else if (c == 355) opt.flag |= MM_F_OUT_DS; // --ds
 		else if (c == 356) opt.rmq_inner_dist = mm_parse_num(o.arg); // --rmq-inner
-		else if (c == 357) fn_spsc = o.arg; // --spsc
 		else if (c == 501) mm_dbg_flag |= MM_DBG_SEED_FREQ; // --dbg-seed-occ
 		else if (c == 330) {
 			fprintf(stderr, "[WARNING] \033[1;31m --lj-min-ratio has been deprecated.\033[0m\n");
@@ -435,16 +431,7 @@ int main(int argc, char *argv[])
 					__func__, realtime() - mm_realtime0, cputime() / (realtime() - mm_realtime0), mi->n_seq);
 		if (argc != o.ind + 1) mm_mapopt_update(&opt, mi);
 		if (mm_verbose >= 3) mm_idx_stat(mi);
-		if (junc_bed) {
-			mm_idx_bed_read(mi, junc_bed, 1);
-			if (mi->I == 0 && mm_verbose >= 2)
-				fprintf(stderr, "[WARNING] failed to load the junction BED file\n");
-		}
-		if (fn_spsc) {
-			mm_idx_spsc_read(mi, fn_spsc, mm_max_spsc_bonus(&opt));
-			if (mi->spsc == 0 && mm_verbose >= 2)
-				fprintf(stderr, "[WARNING] failed to load the splice score file\n");
-		}
+		if (junc_bed) mm_idx_bed_read(mi, junc_bed, 1);
 		if (alt_list) mm_idx_alt_read(mi, alt_list);
 		if (argc - (o.ind + 1) == 0) {
 			mm_idx_destroy(mi);
