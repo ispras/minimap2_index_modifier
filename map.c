@@ -336,40 +336,40 @@ void free_chromosome_info(chromosome_info_t *chr_info, int n_chromosomes) {
     free(chr_info);
 }
 
-// delete second alignment (to improve mapq)
-mm_reg1_t* remove_second_suboptimal_alignment(mm_reg1_t *regs, int *num_regs) {
-	if (!regs || *num_regs < 2) {
-        return regs;
-    }
+// // delete second alignment (to improve mapq)
+// mm_reg1_t* remove_second_suboptimal_alignment(mm_reg1_t *regs, int *num_regs) {
+// 	if (!regs || *num_regs < 2) {
+//         return regs;
+//     }
 
-	mm_reg1_t *r0 = &regs[0];
-	if (*num_regs > 2) {
-		mm_reg1_t *r1 = &regs[2];
-		r0->p->dp_max2 = r1->p->dp_max;
-	}
-	else if (*num_regs == 2) 
-	{
-		r0->p->dp_max2 = 0;
-	}
+// 	mm_reg1_t *r0 = &regs[0];
+// 	if (*num_regs > 2) {
+// 		mm_reg1_t *r1 = &regs[2];
+// 		r0->p->dp_max2 = r1->p->dp_max;
+// 	}
+// 	else if (*num_regs == 2) 
+// 	{
+// 		r0->p->dp_max2 = 0;
+// 	}
 
-	if (r0->n_sub > 0) {
-		r0->n_sub--;
-	}
+// 	if (r0->n_sub > 0) {
+// 		r0->n_sub--;
+// 	}
 
-	if (regs[1].p) {
-        free(regs[1].p);
-    }
+// 	if (regs[1].p) {
+//         free(regs[1].p);
+//     }
 
-	for (int i = 1; i < *num_regs - 1; i++) {
-	    regs[i] = regs[i + 1];
-	}
+// 	for (int i = 1; i < *num_regs - 1; i++) {
+// 	    regs[i] = regs[i + 1];
+// 	}
 
-	(*num_regs)--;
+// 	(*num_regs)--;
 
-	regs = (mm_reg1_t*)realloc(regs, (*num_regs) * sizeof(*regs));
+// 	regs = (mm_reg1_t*)realloc(regs, (*num_regs) * sizeof(*regs));
 
-    return regs;
-}
+//     return regs;
+// }
 
 void mm_map_frag(const mm_idx_t *mi, int n_segs, const int *qlens, const char **seqs, int *n_regs, mm_reg1_t **regs, mm_tbuf_t *b, const mm_mapopt_t *opt, const char *qname)
 {
