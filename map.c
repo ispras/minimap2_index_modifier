@@ -225,45 +225,128 @@ static mm_reg1_t *align_regs(const mm_mapopt_t *opt, const mm_idx_t *mi, void *k
 }
 
 // collecting unique chromosome names found for the current read
-char **collect_seed_chromosome_names(const mm_idx_t *mi, int n_a, mm128_t *a)
+char **collect_seed_chromosome_names(const mm_idx_t *mi, int n_a, mm_reg1_t *regs)
 {
 	int max_chromosomes = 32;
-	int n_chromosomes = 0;
+	//int n_chromosomes = 0;
 	char **chromosome_names = CALLOC(char*, max_chromosomes);
-
-	for (int i = 0; i < max_chromosomes; ++i) {
+	//fprintf(stderr, "debug: ---start %s\n", mi->seq[regs[0].rid].name);
+	const char* best_alignment;
+	char* best_copy;
+	const char* delete_name = "delete";
+	int i;
+	for (i = 0; i < max_chromosomes; ++i) {
 		chromosome_names[i] = NULL;
 	}
+	if (regs != NULL) {
+		for (i = 1; i < n_a; ++i) {
+			//fprintf(stderr, "debug: ---n_a = %d\n", n_a);
+			const char *curr_name;
+			char *curr_copy;
+			char *output;
+			char *best;
+			//fprintf(stderr, "debug: ---address = %ld\n", a[i].x<<1>>33);
 
-	for (int i = 0; i < n_a; ++i) {
-		const char* curr_name = mi->seq[a[i].x<<1>>33].name;
-		int exists = 0;
+			// if ((a[i].x<<1>>33) > max_chromosomes){
+			// 	curr_name = mi->seq[0].name;					      			//[a[i].x<<1>>33]   ???
+			// }
+			// else {				
+			// 	curr_name = mi->seq[a[i].x<<1>>33].name;
+			// }
 
-		for (int j = 0; j < n_chromosomes; ++j) {
-			if (chromosome_names[j] && strcmp(chromosome_names[j], curr_name) == 0) {
-				exists = 1;
-				break;
+			// if (mi->seq[a[i].x<<1>>33].name == NULL) {
+			// 	curr_name = "a";
+			// }
+			// else {
+			// 	curr_name = mi->seq[a[i].x<<1>>33].name;
+			// }
+			//curr_name = mi->seq[a[i].x<<1>>33].name;
+
+			// Проверяем все возможные ошибки перед доступом
+			
+			// if (mi != NULL && mi->seq != NULL) {              //рабочий кусок
+			// 	if (a[i].x != 0) {
+			// 	fprintf(stderr, "debug: ---aboba = %ld, %d, %d\n", a[i].x, i, n_a);
+			// 	}
+			// 	size_t index = (size_t)(a[i].x << 1 >> 33);
+			// 	if (index < mi->n_seq) {  // Используем mi->n_seq вместо max_chromosomes
+			// 		curr_name = mi->seq[index].name;
+			// 	}
+			// 	else {
+			// 		curr_name = NULL;
+			// 	}
+			// }
+			// else {
+			// 	curr_name = NULL;
+			// }
+			best_alignment = mi->seq[regs[0].rid].name;
+			best_copy = strdup(best_alignment);
+			curr_name = mi->seq[regs[i].rid].name;
+			curr_copy = strdup(curr_name);
+			// fprintf(stderr, "debug: ---curr_name = %s\n", curr_name);
+			// fprintf(stderr, "debug: ---best_alignment = %s\n", best_alignment);
+			// 																								//код-затычка
+			// // Если что-то пошло не так, используем резервное имя
+			// if (curr_name == NULL) {
+			// 	curr_name = (mi && mi->seq && mi->n_seq > 0) ? mi->seq[0].name : "unknown";
+			// }
+			if (strstr(curr_name, "contig") != NULL) {
+				chromosome_names[i] = strdup(delete_name);
 			}
-		}
-
-		if (!exists) {
-			if (n_chromosomes >= max_chromosomes) {
-				max_chromosomes *= 2;
-				chromosome_names = (char**)realloc(chromosome_names, max_chromosomes * sizeof(char*));
-				for (int j = n_chromosomes; j < max_chromosomes; ++j) {
-					chromosome_names[j] = NULL;
+			if (strstr(best_alignment, "contig") != NULL) {
+				best = strtok(best_copy, "_");
+				output = strtok(curr_copy, "_");
+				//fprintf(stderr, "debug: ---chr = %s,	%s\n", best, output);
+				if (best != NULL && output != NULL && strcmp(best, output) == 0) {
+					chromosome_names[i] = strdup(delete_name);
+					//fprintf(stderr, "debug: ---delete\n");
 				}
 			}
-			chromosome_names[n_chromosomes] = strdup(curr_name);
-			n_chromosomes++;
+			
+
+			//const char* curr_name = mi->seq[a[i].x<<1>>33].name;
+			//int exists = 0;
+			// fprintf(stderr, "debug: ---curr_name = %s\n", curr_name);
+			// fprintf(stderr, "debug: ---best_alignment = %s\n", best_alignment);
+			// if (!curr_name) {																			/////////
+			// 	curr_name = "A";
+			// }
+			// for (int j = 0; j < n_chromosomes; ++j) {
+			// 	if (curr_name) {
+			// 		if (chromosome_names[j] && strcmp(chromosome_names[j], curr_name) == 0) {
+			// 			exists = 1;
+			// 			break;
+			// 		}
+			// 	}
+			// }
+			// //fprintf(stderr, "debug: ---250 = %d\n", exists);
+			// if (!exists) {
+			// 	if (n_chromosomes >= max_chromosomes) {
+			// 		max_chromosomes *= 2;
+			// 		chromosome_names = (char**)realloc(chromosome_names, (max_chromosomes+1) * sizeof(char*));
+			// 		for (int j = n_chromosomes; j < (max_chromosomes+1); ++j) {
+			// 			chromosome_names[j] = NULL;
+			// 		}
+			// 	}
+			// 	if (curr_name) {
+			// 		chromosome_names[n_chromosomes] = strdup(curr_name);
+			// 		n_chromosomes++;
+			// 	//chromosome_names[n_chromosomes] = NULL;
+			// 	}
+			// }
+			//fprintf(stderr, "debug: ---262 = %d\n", i);
+			free(curr_copy);
+			free(best_copy);
 		}
 	}
+	//free(best_copy);
 
 	return chromosome_names;
 }
 
 void free_chromosome_names(char **chromosome_names, int max_chromosomes) {
-    for (int i = 0; i < max_chromosomes; i++) {
+	int i;
+    for (i = 0; i < max_chromosomes; i++) {
         if (chromosome_names[i] != NULL) {
             free(chromosome_names[i]);
         }
@@ -286,13 +369,15 @@ chromosome_info_t *collect_seed_chromosome_info(const mm_idx_t *mi, int n_a, mm1
     int max_chroms = 32;
     *n_chromosomes = 0;
     chromosome_info_t *chr_info = (chromosome_info_t*)calloc(max_chroms, sizeof(chromosome_info_t));
+	int i;
 
-    for (int i = 0; i < n_a; ++i) {
+    for (i = 0; i < n_a; ++i) {
         uint32_t rid = a[i].x<<1>>33;
         int exists = 0;
         int32_t pos = (int32_t)a[i].x;
+		int j;
 
-        for (int j = 0; j < *n_chromosomes; ++j) {
+        for (j = 0; j < *n_chromosomes; ++j) {
             if (rid == chr_info[j].rid) {
                 exists = 1;
                 chr_info[j].n_hits++;
@@ -330,38 +415,46 @@ chromosome_info_t *collect_seed_chromosome_info(const mm_idx_t *mi, int n_a, mm1
 
 // free chromosome_info
 void free_chromosome_info(chromosome_info_t *chr_info, int n_chromosomes) {
-    for (int i = 0; i < n_chromosomes; i++) {
+	int i;
+    for (i = 0; i < n_chromosomes; i++) {
         free(chr_info[i].name);
     }
     free(chr_info);
 }
 
 // delete second alignment (to improve mapq)
-mm_reg1_t* remove_second_suboptimal_alignment(mm_reg1_t *regs, int *num_regs) {
+mm_reg1_t* remove_second_suboptimal_alignment(mm_reg1_t *regs, int *num_regs, int z) {
 	if (!regs || *num_regs < 2) {
         return regs;
     }
 
-	mm_reg1_t *r0 = &regs[0];
-	if (*num_regs > 2) {
-		mm_reg1_t *r1 = &regs[2];
-		r0->p->dp_max2 = r1->p->dp_max;
-	}
-	else if (*num_regs == 2) 
-	{
-		r0->p->dp_max2 = 0;
-	}
+	//mm_reg1_t *r0 = &regs[z - 1];
+	// if ((*num_regs - z) > 2) {
+	// 	mm_reg1_t *r1 = &regs[z + 1];
+	// 	r0->p->dp_max2 = r1->p->dp_max;
+	// }
+	// else if ((*num_regs - z) == 2) 
+	// {
+	// 	r0->p->dp_max2 = 0;
+	// }
 
-	if (r0->n_sub > 0) {
-		r0->n_sub--;
-	}
+	// if (r0->n_sub > 0) {
+	// 	r0->n_sub--;
+	// }
 
-	if (regs[1].p) {
-        free(regs[1].p);
+	if (regs[z].p) {
+        free(regs[z].p);
     }
-
-	for (int i = 1; i < *num_regs - 1; i++) {
-	    regs[i] = regs[i + 1];
+	int i;
+	//mm_reg1_t *r1;
+	//mm_reg1_t *r2;
+	for (i = z; i < *num_regs - 1; i++) {
+		regs[i] = regs[i + 1];
+		// r1 = &regs[i];
+		// r2 = &regs[i + 1];
+		// r1->p = r2->p;
+	    // r1 = r2;
+		//regs[i].p = regs[i + 1].p;
 	}
 
 	(*num_regs)--;
@@ -420,11 +513,14 @@ void mm_map_frag(const mm_idx_t *mi, int n_segs, const int *qlens, const char **
 	chn_pen_gap  = opt->chain_gap_scale * 0.01 * mi->k;
 	chn_pen_skip = opt->chain_skip_scale * 0.01 * mi->k;
 	if (opt->flag & MM_F_RMQ) {
+		//fprintf(stderr, "debug: ---aboba = %ld\n", a[27].x);
 		a = mg_lchain_rmq(opt->max_gap, opt->rmq_inner_dist, opt->bw, opt->max_chain_skip, opt->rmq_size_cap, opt->min_cnt, opt->min_chain_score,
 						  chn_pen_gap, chn_pen_skip, n_a, a, &n_regs0, &u, b->km);
 	} else {
+		//fprintf(stderr, "debug: ---aboba = %ld\n", a[27].x);
 		a = mg_lchain_dp(max_chain_gap_ref, max_chain_gap_qry, opt->bw, opt->max_chain_skip, opt->max_chain_iter, opt->min_cnt, opt->min_chain_score,
 						 chn_pen_gap, chn_pen_skip, is_splice, n_segs, n_a, a, &n_regs0, &u, b->km);
+		//fprintf(stderr, "debug: ---aboba = %ld\n", a[27].x);
 	}
 
 	if (opt->bw_long > opt->bw && (opt->flag & (MM_F_SPLICE|MM_F_SR|MM_F_NO_LJOIN)) == 0 && n_segs == 1 && n_regs0 > 1) { // re-chain/long-join for long sequences
@@ -482,21 +578,72 @@ void mm_map_frag(const mm_idx_t *mi, int n_segs, const int *qlens, const char **
 		n_regs0 = mm_filter_strand_retained(n_regs0, regs0);
 	}
 
-	fprintf(stderr, "\ndebug: collect_seed_chromosome_names\n");
-	char **chromosome_names = collect_seed_chromosome_names(mi, n_a, a);
-	fprintf(stderr, "debug: ---qname = %s\n", qname);
+	// fprintf(stderr, "\ndebug: collect_seed_chromosome_names\n");
+	// char **chromosome_names = collect_seed_chromosome_names(mi, n_a, a);
+	char **death_note_chromosome_names;
+	//int first_two_contigs = 0;
+	// fprintf(stderr, "debug: ---qname = %s\n", qname);
 	//for (int i = 0; i < n_a; i++) {
-	for (int i = 0; i < 32; i++) {
-		if (chromosome_names[i]) {
-			fprintf(stderr, "debug: ---chromosome_names[%d] = %s\n", i, chromosome_names[i]);
-		}
-	}
+	// for (int i = 0; i < 32; i++) {
+	// 	if (chromosome_names[i]) {
+	// 		fprintf(stderr, "debug: ---chromosome_names[%d] = %s\n", i, chromosome_names[i]);
+	// 	}
+	// }
 
 	if (n_segs == 1) { // uni-segment
 		regs0 = align_regs(opt, mi, b->km, qlens[0], seqs[0], &n_regs0, regs0, a);
 		regs0 = (mm_reg1_t*)realloc(regs0, sizeof(*regs0) * n_regs0);
-		regs0 = remove_second_suboptimal_alignment(regs0, &n_regs0);
-		mm_set_mapq(b->km, n_regs0, regs0, opt->min_chain_score, opt->a, rep_len, is_sr, chromosome_names);
+		// regs0 = remove_second_suboptimal_alignment(regs0, &n_regs0);
+		death_note_chromosome_names = collect_seed_chromosome_names(mi, n_regs0, regs0);
+		// if(n_regs0 >= 2 && chromosome_names[1] != NULL) {
+		// 	if (strstr(chromosome_names[0], "contig") != NULL && strstr(chromosome_names[1], "contig") != NULL) {
+		// 		first_two_contigs = 1;
+		// 		//fprintf(stderr, "Оба элемента содержат 'contig'\n");
+		// 	} else {
+		// 		first_two_contigs = 0;
+		// 		//fprintf(stderr, "Как минимум один элемент не содержит 'contig'\n");
+		// 	}
+		// }
+		mm_reg1_t r = regs0[0];
+		// fprintf(stderr, "id = %d\trid = %d\tdp_max0 = %d\tdp_max = %d\tdp_max2 = %d\tdp_score = %d\tsubsc = %d\tscore = %d\tparent = %d\n\n", 
+        //         r.id, r.rid, r.p->dp_max0, r.p->dp_max, r.p->dp_max2, r.p->dp_score, r.subsc, r.score, r.parent);
+		int z;
+		char* delete_name = "delete";
+		for (z = n_regs0 - 1; z > 0; z--) {
+			r = regs0[z];
+			// fprintf(stderr, "id = %d\trid = %d\tdp_max0 = %d\tdp_max = %d\tdp_max2 = %d\tdp_score = %d\tsubsc = %d\tscore = %d\tparent = %d\n\n", 
+            //     r.id, r.rid, r.p->dp_max0, r.p->dp_max, r.p->dp_max2, r.p->dp_score, r.subsc, r.score, r.parent);
+			if (death_note_chromosome_names[z] != NULL && strcmp(death_note_chromosome_names[z], delete_name) == 0) {
+				//fprintf(stderr, "debug: ---delete\n");
+				regs0 = remove_second_suboptimal_alignment(regs0, &n_regs0, z);
+				regs0[0].n_sub--;
+			}
+		}
+
+		int max_dpmax2 = 0;
+		int max_score = 0;
+		for (z = 1; z < n_regs0; z++) {
+			regs0[z].id = z;
+			//fprintf(stderr, "%d\n", regs0[z].p->dp_score);
+			if (regs0[z].p->dp_score > max_dpmax2) {
+				max_dpmax2 = regs0[z].p->dp_score;
+			}
+			if (regs0[z].score > max_score) {
+				max_score = regs0[z].score;
+			}
+		}
+		regs0[0].p->dp_max2 = max_dpmax2;
+		regs0[0].subsc = max_score;
+
+		// fprintf(stderr, "aboba\n");
+		// for (z = 0; z < n_regs0; z++) {
+		// 	r = regs0[z];
+		// 	fprintf(stderr, "id = %d\trid = %d\tdp_max0 = %d\tdp_max = %d\tdp_max2 = %d\tdp_score = %d\tsubsc = %d\tscore = %d\tparent = %d\tid = %d\n\n", 
+        //         r.id, r.rid, r.p->dp_max0, r.p->dp_max, r.p->dp_max2, r.p->dp_score, r.subsc, r.score, r.parent, r.id);
+		// }
+		//fprintf(stderr, "ans - %d\n", regs0[0].subsc);
+
+		mm_set_mapq(b->km, n_regs0, regs0, opt->min_chain_score, opt->a, rep_len, is_sr, death_note_chromosome_names);
 		n_regs[0] = n_regs0, regs[0] = regs0;
 	} else { // multi-segment
 		mm_seg_t *seg;
@@ -505,15 +652,31 @@ void mm_map_frag(const mm_idx_t *mi, int n_segs, const int *qlens, const char **
 		for (i = 0; i < n_segs; ++i) {
 			mm_set_parent(b->km, opt->mask_level, opt->mask_len, n_regs[i], regs[i], opt->a * 2 + opt->b, opt->flag&MM_F_HARD_MLEVEL, opt->alt_drop); // update mm_reg1_t::parent
 			regs[i] = align_regs(opt, mi, b->km, qlens[i], seqs[i], &n_regs[i], regs[i], seg[i].a);
-			regs[i] = remove_second_suboptimal_alignment(regs[i], &n_regs[i]);
-			mm_set_mapq(b->km, n_regs[i], regs[i], opt->min_chain_score, opt->a, rep_len, is_sr, chromosome_names);
+			//regs[i] = remove_second_suboptimal_alignment(regs[i], &n_regs[i]);
+
+			death_note_chromosome_names = collect_seed_chromosome_names(mi, n_regs0, regs0);
+
+			// if(n_regs0 >= 2 && chromosome_names[1] != NULL) {
+			// 	if (strstr(chromosome_names[0], "contig") != NULL && strstr(chromosome_names[1], "contig") != NULL) {
+			// 		first_two_contigs = 1;
+			// 		//fprintf(stderr, "Оба элемента содержат 'contig'\n");
+			// 	} else {
+			// 		first_two_contigs = 0;
+			// 		//fprintf(stderr, "Как минимум один элемент не содержит 'contig'\n");
+			// 	}
+			// }
+
+			regs[i] = remove_second_suboptimal_alignment(regs[i], &n_regs[i], i);
+			//fprintf(stderr, "debug: ---qname = %s\n", qname);
+			mm_set_mapq(b->km, n_regs[i], regs[i], opt->min_chain_score, opt->a, rep_len, is_sr, death_note_chromosome_names);
+			
 		}
 		mm_seg_free(b->km, n_segs, seg);
 		if (n_segs == 2 && opt->pe_ori >= 0 && (opt->flag&MM_F_CIGAR))
 			mm_pair(b->km, max_chain_gap_ref, opt->pe_bonus, opt->a * 2 + opt->b, opt->a, qlens, n_regs, regs); // pairing
 	}
 
-	free_chromosome_names(chromosome_names, 32);
+	free_chromosome_names(death_note_chromosome_names, 32);
 
 	kfree(b->km, mv.a);
 	kfree(b->km, a);
@@ -670,7 +833,7 @@ static void merge_hits(step_t *s)
 				mm_select_sub(km, opt->pri_ratio, s->p->mi->k*2, opt->best_n, 0, opt->max_gap * 0.8, &s->n_reg[k], s->reg[k]);
 				mm_set_sam_pri(s->n_reg[k], s->reg[k]);
 			}
-			s->reg[k] = remove_second_suboptimal_alignment(s->reg[k], &(s->n_reg[k]));
+			s->reg[k] = remove_second_suboptimal_alignment(s->reg[k], &(s->n_reg[k]), k);
 			mm_set_mapq(km, s->n_reg[k], s->reg[k], opt->min_chain_score, opt->a, rep_len, !!(opt->flag & MM_F_SR), NULL);
 		}
 		if (s->n_seg[f] == 2 && opt->pe_ori >= 0 && (opt->flag&MM_F_CIGAR))

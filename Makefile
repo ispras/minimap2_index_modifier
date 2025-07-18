@@ -1,4 +1,4 @@
-CFLAGS=		-g -Wall -Wc++-compat -fsanitize=address# -O2 -Wextra 
+CFLAGS=		-g -Wall -Wc++-compat -O0# -O2 -Wextra 
 CPPFLAGS=	-DHAVE_KALLOC
 INCLUDES=
 OBJS=		kthread.o kalloc.o misc.o bseq.o sketch.o sdust.o options.o index.o \

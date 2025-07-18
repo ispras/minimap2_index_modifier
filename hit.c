@@ -431,9 +431,11 @@ int genome_and_contig_exist(char **arr) {
 	
 	int chr_found[22] = { 0 };
 	int chr_contig_found[22] = { 0 };
+	int i = 0;
+	int n;
 
-	for (int i = 0; arr[i] != NULL; i++) {
-		for (int n = 1; n <= 22; n++) {
+	for (i = 0; arr[i] != NULL; i++) {
+		for (n = 1; n <= 22; n++) {
 			char chr[50];
 			sprintf(chr, "chr%d", n);
 
@@ -450,7 +452,7 @@ int genome_and_contig_exist(char **arr) {
 		}
 	}
 
-	for (int i = 0; i < 22; i++) {
+	for (i = 0; i < 22; i++) {
 		if (chr_found[i] && chr_contig_found[i]) {
 			return 1;
 		}
@@ -464,10 +466,10 @@ int genome_and_contig_exist(char **arr) {
 
 void mm_set_mapq(void *km, int n_regs, mm_reg1_t *regs, int min_chain_sc, int match_sc, int rep_len, int is_sr, char **chromosome_names)
 {
-	int has_matching_chr = 0;
-    if (chromosome_names != NULL) {
-        has_matching_chr = genome_and_contig_exist(chromosome_names);
-    }
+	// int has_matching_chr = 0;
+    // if (chromosome_names != NULL) {
+    //     has_matching_chr = genome_and_contig_exist(chromosome_names);
+    // }
 
 	static const float q_coef = 40.0f;
 	int64_t sum_sc = 0;
@@ -512,9 +514,9 @@ void mm_set_mapq(void *km, int n_regs, mm_reg1_t *regs, int min_chain_sc, int ma
 			mapq = mapq > 0? mapq : 0;
 			r->mapq = mapq < 60? mapq : 60;
 			if (r->p && r->p->dp_max > r->p->dp_max2 && r->mapq == 0) r->mapq = 1;
-			if (has_matching_chr) {
-				r->mapq = 60;
-			}
+			// if (has_matching_chr) {
+			// 	r->mapq = 60;
+			// }
 		} else r->mapq = 0;
 
 	}
