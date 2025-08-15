@@ -604,11 +604,14 @@ void mm_map_frag(const mm_idx_t *mi, int n_segs, const int *qlens, const char **
 		// 		//fprintf(stderr, "Как минимум один элемент не содержит 'contig'\n");
 		// 	}
 		// }
-		mm_reg1_t r = regs0[0];
+		mm_reg1_t r;
+		if (n_regs0 > 0)
+			r = regs0[0];
 		// fprintf(stderr, "id = %d\trid = %d\tdp_max0 = %d\tdp_max = %d\tdp_max2 = %d\tdp_score = %d\tsubsc = %d\tscore = %d\tparent = %d\n\n", 
         //         r.id, r.rid, r.p->dp_max0, r.p->dp_max, r.p->dp_max2, r.p->dp_score, r.subsc, r.score, r.parent);
 		int z;
 		char* delete_name = "delete";
+		//fprintf(stderr, "debug: ---n_regs0 = %d\n", n_regs0);
 		for (z = n_regs0 - 1; z > 0; z--) {
 			r = regs0[z];
 			// fprintf(stderr, "id = %d\trid = %d\tdp_max0 = %d\tdp_max = %d\tdp_max2 = %d\tdp_score = %d\tsubsc = %d\tscore = %d\tparent = %d\n\n", 
@@ -616,7 +619,9 @@ void mm_map_frag(const mm_idx_t *mi, int n_segs, const int *qlens, const char **
 			if (death_note_chromosome_names[z] != NULL && strcmp(death_note_chromosome_names[z], delete_name) == 0) {
 				//fprintf(stderr, "debug: ---delete\n");
 				regs0 = remove_second_suboptimal_alignment(regs0, &n_regs0, z);
-				regs0[0].n_sub--;
+				//fprintf(stderr, "debug: ---n_regs0 = %d\n", n_regs0);
+				//regs0[0].n_sub--;
+				regs0[0].n_sub = n_regs0 - 1;
 			}
 		}
 
@@ -632,9 +637,16 @@ void mm_map_frag(const mm_idx_t *mi, int n_segs, const int *qlens, const char **
 				max_score = regs0[z].score;
 			}
 		}
-		regs0[0].p->dp_max2 = max_dpmax2;
-		regs0[0].subsc = max_score;
 
+		if (n_regs0 > 0) {
+			if (regs0[0].p != NULL)
+				regs0[0].p->dp_max2 = max_dpmax2;
+			regs0[0].subsc = max_score;
+		}
+
+		for (z = 0; z < n_regs0; z++) {
+			//fprintf(stderr, "---names: %s\n", mi->seq[regs0[z].rid].name);
+		}
 		// fprintf(stderr, "aboba\n");
 		// for (z = 0; z < n_regs0; z++) {
 		// 	r = regs0[z];
