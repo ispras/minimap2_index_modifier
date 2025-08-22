@@ -8,6 +8,10 @@ PROG=		minimap2
 PROG_EXTRA=	sdust minimap2-lite
 LIBS=		-lm -lz -lpthread -lhts
 
+ifneq ($(aarch64),)
+	arm_neon=1
+endif
+
 ifeq ($(arm_neon),) # if arm_neon is not defined
 ifeq ($(sse2only),) # if sse2only is not defined
 	OBJS+=ksw2_extz2_sse41.o ksw2_extd2_sse41.o ksw2_exts2_sse41.o ksw2_extz2_sse2.o ksw2_extd2_sse2.o ksw2_exts2_sse2.o ksw2_dispatch.o
@@ -26,12 +30,12 @@ endif
 
 ifneq ($(asan),)
 	CFLAGS+=-fsanitize=address
-	LIBS+=-fsanitize=address
+	LIBS+=-fsanitize=address -ldl
 endif
 
 ifneq ($(tsan),)
 	CFLAGS+=-fsanitize=thread
-	LIBS+=-fsanitize=thread
+	LIBS+=-fsanitize=thread -ldl
 endif
 
 .PHONY:all extra clean depend
@@ -111,8 +115,9 @@ esterr.o: mmpriv.h minimap.h bseq.h kseq.h
 example.o: minimap.h kseq.h
 format.o: kalloc.h mmpriv.h minimap.h bseq.h kseq.h
 hit.o: mmpriv.h minimap.h bseq.h kseq.h kalloc.h khash.h
-index.o: kthread.h bseq.h minimap.h mmpriv.h kseq.h kvec.h kalloc.h khash.h
-index.o: ksort.h
+index.o: kthread.h bseq.h minimap.h mmpriv.h kseq.h ksw2.h kalloc.h kvec.h
+index.o: khash.h ksort.h
+jump.o: mmpriv.h minimap.h bseq.h kseq.h
 kalloc.o: kalloc.h
 ksw2_extd2_sse.o: ksw2.h kalloc.h
 ksw2_exts2_sse.o: ksw2.h kalloc.h

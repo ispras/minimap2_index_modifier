@@ -3,56 +3,258 @@ Minimap2_index_modifier
 Minimap2_index_modifier is a fork of alignment tool [minimap2](https://github.com/lh3/minimap2).
 Unlike the original tool, this can use the variants defined in the VCF file when generating the index, for more accurate alignment.
 
+#### <a name="map-long-splice"></a>Map long mRNA/cDNA reads
 
-Minimap2_index_modifier can be used in the same way as the original minimap2.  
-To create a modified index use additional parameter `--vcf-file-with-variants <vcf-file>`.
-```bash
-minimap2 -d index.mmi --vcf-file-with-variants input.vcf.gz reference.fasta
+```sh
+minimap2 -ax splice:hq -uf ref.fa iso-seq.fq > aln.sam       # PacBio Iso-seq/traditional cDNA
+minimap2 -ax splice ref.fa nanopore-cdna.fa > aln.sam        # Nanopore 2D cDNA-seq
+minimap2 -ax splice -uf -k14 ref.fa direct-rna.fq > aln.sam  # Nanopore Direct RNA-seq
+minimap2 -ax splice --splice-flank=no SIRV.fa SIRV-seq.fa    # mapping against SIRV control
 ```
+There are different long-read RNA-seq technologies, including tranditional
+full-length cDNA, EST, PacBio Iso-seq, Nanopore 2D cDNA-seq and Direct RNA-seq.
+They produce data of varying quality and properties. By default, `-x splice`
+assumes the read orientation relative to the transcript strand is unknown. It
+tries two rounds of alignment to infer the orientation and write the strand to
+the `ts` SAM/PAF tag if possible. For Iso-seq, Direct RNA-seq and tranditional
+full-length cDNAs, it would be desired to apply `-u f` to force minimap2 to
+consider the forward transcript strand only. This speeds up alignment with
+slight improvement to accuracy. For noisy Nanopore Direct RNA-seq reads, it is
+recommended to use a smaller k-mer size for increased sensitivity to the first
+or the last exons.
 
-Use flag `--parse-haplotype` if your VCF contains phased haplotypes.
+Minimap2 rates an alignment by the score of the max-scoring sub-segment,
+*excluding* introns, and marks the best alignment as primary in SAM. When a
+spliced gene also has unspliced pseudogenes, minimap2 does not intentionally
+prefer spliced alignment, though in practice it more often marks the spliced
+alignment as the primary. By default, minimap2 outputs up to five secondary
+alignments (i.e. likely pseudogenes in the context of RNA-seq mapping). This
+can be tuned with option **-N**.
 
-## Contents
-* [Installation](#installation)
-  * [Compiling from source](#compiling-from-source)
-  * [Docker](#docker)
-  * [Dockerhub](#dockerhub)
-* [Pre-built indexes](#pre-built-indexes)
-* [Tests](#tests)
-* [Publication](#publication)
+For long RNA-seq reads, minimap2 may produce chimeric alignments potentially
+caused by gene fusions/structural variations or by an intron longer than the
+max intron length **-G** (200k by default). For now, it is not recommended to
+apply an excessively large **-G** as this slows down minimap2 and sometimes
+leads to false alignments.
 
-## Installation
-### Compiling from source
-To compile from source, use this version of tools:
+It is worth noting that by default `-x splice` prefers GT[A/G]..[C/T]AG
+over GT[C/T]..[A/G]AG, and then over other splicing signals. Considering
+one additional base improves the junction accuracy for noisy reads, but
+reduces the accuracy when aligning against the widely used SIRV control data.
+This is because SIRV does not honor the evolutionarily conservative splicing
+signal. If you are studying SIRV, you may apply `--splice-flank=no` to let
+minimap2 only model GT..AG, ignoring the additional base.
 
-* GCC/G++ 11.4.0+
-* HTSlib v1.17
-
-Command to compile:
-```bash
-cd minimap2_index_modifier && make
+Since v2.17, minimap2 can optionally take annotated genes as input and
+prioritize on annotated splice junctions. To use this feature, you can
+```sh
+paftools.js gff2bed anno.gff > anno.bed
+minimap2 -ax splice --junc-bed anno.bed ref.fa query.fa > aln.sam
 ```
+Here, `anno.gff` is the gene annotation in the GTF or GFF3 format (`gff2bed`
+automatically tests the format). The output of `gff2bed` is in the 12-column
+BED format, or the BED12 format. With the `--junc-bed` option, minimap2 adds a
+bonus score (tuned by `--junc-bonus`) if an aligned junction matches a junction
+in the annotation. Option `--junc-bed` also takes 5-column BED, including the
+strand field. In this case, each line indicates an oriented junction.
 
-### Docker
-Clone this repository and build a Docker image as follows.
-```bash
-docker build -t minimap2_index_modifier:2.24 .
+#### <a name="long-overlap"></a>Find overlaps between long reads
+
+```sh
+minimap2 -x ava-pb  reads.fq reads.fq > ovlp.paf    # PacBio CLR read overlap
+minimap2 -x ava-ont reads.fq reads.fq > ovlp.paf    # Oxford Nanopore read overlap
 ```
+Similarly, `ava-pb` uses HPC minimizers while `ava-ont` uses ordinary
+minimizers. It is usually not recommended to perform base-level alignment in
+the overlapping mode because it is slow and may produce false positive
+overlaps. However, if performance is not a concern, you may try to add `-a` or
+`-c` anyway.
 
-### Dockerhub
-Clone Docker image from Dockerhub.
-```bash
-docker pull egorguga/minimap2_index_modifier:2.24
+#### <a name="short-genomic"></a>Map short accurate genomic reads
+
+```sh
+minimap2 -ax sr ref.fa reads-se.fq > aln.sam           # single-end alignment
+minimap2 -ax sr ref.fa read1.fq read2.fq > aln.sam     # paired-end alignment
+minimap2 -ax sr ref.fa reads-interleaved.fq > aln.sam  # paired-end alignment
 ```
+When two read files are specified, minimap2 reads from each file in turn and
+merge them into an interleaved stream internally. Two reads are considered to
+be paired if they are adjacent in the input stream and have the same name (with
+the `/[0-9]` suffix trimmed if present). Single- and paired-end reads can be
+mixed.
 
-## Pre-built indexes
-This [link](https://nextcloud.ispras.ru/index.php/s/wcb9PpZyr8Gb5CC) contains pre-built modified indexes for next references:
-* GRCh38 [(GCA_000001405.15)](https://ftp-trace.ncbi.nlm.nih.gov/giab/ftp/release/references/GRCh38/)
-* GRCh37 [(hs37d5)](https://ftp-trace.ncbi.nlm.nih.gov/giab/ftp/release/references/GRCh37/)
+Minimap2 does not work well with short spliced reads. There are many capable
+RNA-seq mappers for short reads.
 
-## Tests
-See [test/tests.md](test/tests.md) for more details.
+#### <a name="full-genome"></a>Full genome/assembly alignment
 
-# Publication
-Guguchkin, E., Kasianov, A., Belenikin, M. et al. Enhancing SNV identification in whole-genome sequencing data through the incorporation of known genetic variants into the minimap2 index. BMC Bioinformatics 25, 238 (2024). https://doi.org/10.1186/s12859-024-05862-y
-  
+```sh
+minimap2 -ax asm5 ref.fa asm.fa > aln.sam       # assembly to assembly/ref alignment
+```
+For cross-species full-genome alignment, the scoring system needs to be tuned
+according to the sequence divergence.
+
+### <a name="advanced"></a>Advanced features
+
+#### <a name="long-cigar"></a>Working with >65535 CIGAR operations
+
+Due to a design flaw, BAM does not work with CIGAR strings with >65535
+operations (SAM and CRAM work). However, for ultra-long nanopore reads minimap2
+may align ~1% of read bases with long CIGARs beyond the capability of BAM. If
+you convert such SAM/CRAM to BAM, Picard and recent samtools will throw an
+error and abort. Older samtools and other tools may create corrupted BAM.
+
+To avoid this issue, you can add option `-L` at the minimap2 command line.
+This option moves a long CIGAR to the `CG` tag and leaves a fully clipped CIGAR
+at the SAM CIGAR column. Current tools that don't read CIGAR (e.g. merging and
+sorting) still work with such BAM records; tools that read CIGAR will
+effectively ignore these records. It has been decided that future tools
+will seamlessly recognize long-cigar records generated by option `-L`.
+
+**TL;DR**: if you work with ultra-long reads and use tools that only process
+BAM files, please add option `-L`.
+
+#### <a name="cs"></a>The cs optional tag
+
+The `cs` SAM/PAF tag encodes bases at mismatches and INDELs. It matches regular
+expression `/(:[0-9]+|\*[a-z][a-z]|[=\+\-][A-Za-z]+)+/`. Like CIGAR, `cs`
+consists of series of operations.  Each leading character specifies the
+operation; the following sequence is the one involved in the operation.
+
+The `cs` tag is enabled by command line option `--cs`. The following alignment,
+for example:
+```txt
+CGATCGATAAATAGAGTAG---GAATAGCA
+||||||   ||||||||||   |||| |||
+CGATCG---AATAGAGTAGGTCGAATtGCA
+```
+is represented as `:6-ata:10+gtc:4*at:3`, where `:[0-9]+` represents an
+identical block, `-ata` represents a deletion, `+gtc` an insertion and `*at`
+indicates reference base `a` is substituted with a query base `t`. It is
+similar to the `MD` SAM tag but is standalone and easier to parse.
+
+If `--cs=long` is used, the `cs` string also contains identical sequences in
+the alignment. The above example will become
+`=CGATCG-ata=AATAGAGTAG+gtc=GAAT*at=GCA`. The long form of `cs` encodes both
+reference and query sequences in one string. The `cs` tag also encodes intron
+positions and splicing signals (see the [minimap2 manpage][manpage-cs] for
+details).
+
+#### <a name="paftools"></a>Working with the PAF format
+
+Minimap2 also comes with a (java)script [paftools.js](misc/paftools.js) that
+processes alignments in the PAF format. It calls variants from
+assembly-to-reference alignment, lifts over BED files based on alignment,
+converts between formats and provides utilities for various evaluations. For
+details, please see [misc/README.md](misc/README.md).
+
+### <a name="algo"></a>Algorithm overview
+
+In the following, minimap2 command line options have a dash ahead and are
+highlighted in bold. The description may help to tune minimap2 parameters.
+
+1. Read **-I** [=*4G*] reference bases, extract (**-k**,**-w**)-minimizers and
+   index them in a hash table.
+
+2. Read **-K** [=*200M*] query bases. For each query sequence, do step 3
+   through 7:
+
+3. For each (**-k**,**-w**)-minimizer on the query, check against the reference
+   index. If a reference minimizer is not among the top **-f** [=*2e-4*] most
+   frequent, collect its the occurrences in the reference, which are called
+   *seeds*.
+
+4. Sort seeds by position in the reference. Chain them with dynamic
+   programming. Each chain represents a potential mapping. For read
+   overlapping, report all chains and then go to step 8. For reference mapping,
+   do step 5 through 7:
+
+5. Let *P* be the set of primary mappings, which is an empty set initially. For
+   each chain from the best to the worst according to their chaining scores: if
+   on the query, the chain overlaps with a chain in *P* by **--mask-level**
+   [=*0.5*] or higher fraction of the shorter chain, mark the chain as
+   *secondary* to the chain in *P*; otherwise, add the chain to *P*.
+
+6. Retain all primary mappings. Also retain up to **-N** [=*5*] top secondary
+   mappings if their chaining scores are higher than **-p** [=*0.8*] of their
+   corresponding primary mappings.
+
+7. If alignment is requested, filter out an internal seed if it potentially
+   leads to both a long insertion and a long deletion. Extend from the
+   left-most seed. Perform global alignments between internal seeds.  Split the
+   chain if the accumulative score along the global alignment drops by **-z**
+   [=*400*], disregarding long gaps. Extend from the right-most seed.  Output
+   chains and their alignments.
+
+8. If there are more query sequences in the input, go to step 2 until no more
+   queries are left.
+
+9. If there are more reference sequences, reopen the query file from the start
+   and go to step 1; otherwise stop.
+
+### <a name="help"></a>Getting help
+
+Manpage [minimap2.1][manpage] provides detailed description of minimap2
+command line options and optional tags. The [FAQ](FAQ.md) page answers several
+frequently asked questions. If you encounter bugs or have further questions or
+requests, you can raise an issue at the [issue page][issue].  There is not a
+specific mailing list for the time being.
+
+### <a name="cite"></a>Citing minimap2
+
+If you use minimap2 in your work, please cite:
+
+> Li, H. (2018). Minimap2: pairwise alignment for nucleotide sequences.
+> *Bioinformatics*, **34**:3094-3100. [doi:10.1093/bioinformatics/bty191][doi]
+
+## <a name="dguide"></a>Developers' Guide
+
+Minimap2 is not only a command line tool, but also a programming library.
+It provides C APIs to build/load index and to align sequences against the
+index. File [example.c](example.c) demonstrates typical uses of C APIs. Header
+file [minimap.h](minimap.h) gives more detailed API documentation. Minimap2
+aims to keep APIs in this header stable. File [mmpriv.h](mmpriv.h) contains
+additional private APIs which may be subjected to changes frequently.
+
+This repository also provides Python bindings to a subset of C APIs. File
+[python/README.rst](python/README.rst) gives the full documentation;
+[python/minimap2.py](python/minimap2.py) shows an example. This Python
+extension, mappy, is also [available from PyPI][mappypypi] via `pip install
+mappy` or [from BioConda][mappyconda] via `conda install -c bioconda mappy`.
+
+## <a name="limit"></a>Limitations
+
+* Minimap2 may produce suboptimal alignments through long low-complexity
+  regions where seed positions may be suboptimal. This should not be a big
+  concern because even the optimal alignment may be wrong in such regions.
+
+* Minimap2 requires SSE2 instructions on x86 CPUs or NEON on ARM CPUs. It is
+  possible to add non-SIMD support, but it would make minimap2 slower by
+  several times.
+
+* Minimap2 does not work with a single query or database sequence ~2
+  billion bases or longer (2,147,483,647 to be exact). The total length of all
+  sequences can well exceed this threshold.
+
+* Minimap2 often misses small exons.
+
+
+
+[paf]: https://github.com/lh3/miniasm/blob/master/PAF.md
+[sam]: https://samtools.github.io/hts-specs/SAMv1.pdf
+[minimap]: https://github.com/lh3/minimap
+[smartdenovo]: https://github.com/ruanjue/smartdenovo
+[longislnd]: https://www.ncbi.nlm.nih.gov/pubmed/27667791
+[gaba]: https://github.com/ocxtal/libgaba
+[ksw2]: https://github.com/lh3/ksw2
+[preprint]: https://arxiv.org/abs/1708.01492
+[release]: https://github.com/lh3/minimap2/releases
+[mappypypi]: https://pypi.python.org/pypi/mappy
+[mappyconda]: https://anaconda.org/bioconda/mappy
+[issue]: https://github.com/lh3/minimap2/issues
+[k8]: https://github.com/attractivechaos/k8
+[manpage]: https://lh3.github.io/minimap2/minimap2.html
+[manpage-cs]: https://lh3.github.io/minimap2/minimap2.html#10
+[doi]: https://doi.org/10.1093/bioinformatics/bty191
+[smide]: https://github.com/nemequ/simde
+[unimap]: https://github.com/lh3/unimap

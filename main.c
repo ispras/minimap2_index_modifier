@@ -7,8 +7,6 @@
 #include "mmpriv.h"
 #include "ketopt.h"
 
-#define MM_VERSION "2.24-r1122"
-
 #ifdef __linux__
 #include <sys/resource.h>
 #include <sys/time.h>
@@ -37,12 +35,12 @@ static ko_longopt_t long_options[] = {
 	{ "splice",         ko_no_argument,       310 },
 	{ "cost-non-gt-ag", ko_required_argument, 'C' },
 	{ "no-long-join",   ko_no_argument,       312 },
-	{ "sr",             ko_no_argument,       313 },
+	{ "sr",             ko_optional_argument, 313 },
 	{ "frag",           ko_required_argument, 314 },
 	{ "secondary",      ko_required_argument, 315 },
 	{ "cs",             ko_optional_argument, 316 },
 	{ "end-bonus",      ko_required_argument, 317 },
-	{ "no-pairing",     ko_no_argument,       318 },
+	{ "no-pairing",     ko_no_argument,       318 }, // deprecated but reserved for backward compatibility
 	{ "splice-flank",   ko_required_argument, 319 },
 	{ "idx-no-seq",     ko_no_argument,       320 },
 	{ "end-seed-pen",   ko_required_argument, 321 },
@@ -78,8 +76,20 @@ static ko_longopt_t long_options[] = {
 	{ "chain-skip-scale",ko_required_argument,351 },
 	{ "print-chains",   ko_no_argument,       352 },
 	{ "no-hash-name",   ko_no_argument,       353 },
-	{ "vcf-file-with-variants",ko_required_argument,354 },
-    { "parse-haplotype",ko_no_argument,      355 },
+	{ "secondary-seq",  ko_no_argument,       354 },
+	{ "ds",             ko_no_argument,       355 },
+	{ "rmq-inner",      ko_required_argument, 356 },
+	{ "spsc",           ko_required_argument, 357 },
+	{ "junc-pen",       ko_required_argument, 358 },
+	{ "pairing",        ko_required_argument, 359 },
+	{ "jump-min-match", ko_required_argument, 360 },
+	{ "write-junc",     ko_no_argument,       361 },
+	{ "pass1",          ko_required_argument, 362 },
+	{ "spsc-scale",     ko_required_argument, 363 },
+	{ "spsc0",          ko_required_argument, 364 },
+	{ "dbg-seed-occ",   ko_no_argument,       501 },
+    { "vcf-file-with-variants",ko_required_argument, 700 },
+    { "parse-haplotype",ko_no_argument,       701 },
 	{ "help",           ko_no_argument,       'h' },
 	{ "max-intron-len", ko_required_argument, 'G' },
 	{ "version",        ko_no_argument,       'V' },
@@ -123,13 +133,14 @@ static inline void yes_or_no(mm_mapopt_t *opt, int64_t flag, int long_idx, const
 
 int main(int argc, char *argv[])
 {
-	const char *opt_str = "2aSDw:k:K:t:r:f:Vv:g:G:I:d:XT:s:x:Hcp:M:n:z:A:B:O:E:m:N:Qu:R:hF:LC:yYPo:e:U:";
+	const char *opt_str = "2aSDw:k:K:t:r:f:Vv:g:G:I:d:XT:s:x:Hcp:M:n:z:A:B:b:O:E:m:N:Qu:R:hF:LC:yYPo:e:U:J:j:";
 	ketopt_t o = KETOPT_INIT;
 	mm_mapopt_t opt;
 	mm_idxopt_t ipt;
 	int i, c, n_threads = 3, n_parts, old_best_n = -1;
-	char *fnw = 0, *rg = 0, *junc_bed = 0, *s, *alt_list = 0;
 	char *vcf_with_variants = 0;
+	float spsc_scale = 0.7f;
+	char *fnw = 0, *rg = 0, *fn_bed_junc = 0, *fn_bed_jump = 0, *fn_bed_pass1 = 0, *fn_spsc = 0, *s, *alt_list = 0;
 	FILE *fp_help = stderr;
 	mm_idx_reader_t *idx_rdr;
 	mm_idx_t *mi;
@@ -182,6 +193,7 @@ int main(int argc, char *argv[])
 		else if (c == 'm') opt.min_chain_score = atoi(o.arg);
 		else if (c == 'A') opt.a = atoi(o.arg);
 		else if (c == 'B') opt.b = atoi(o.arg);
+		else if (c == 'b') opt.transition = atoi(o.arg);
 		else if (c == 's') opt.min_dp_max = atoi(o.arg);
 		else if (c == 'C') opt.noncan = atoi(o.arg);
 		else if (c == 'I') ipt.batch_size = mm_parse_num(o.arg);
@@ -190,7 +202,13 @@ int main(int argc, char *argv[])
 		else if (c == 'R') rg = o.arg;
 		else if (c == 'h') fp_help = stdout;
 		else if (c == '2') opt.flag |= MM_F_2_IO_THREADS;
-		else if (c == 'o') {
+		else if (c == 'j') fn_bed_jump = o.arg;
+		else if (c == 'J') {
+			int t;
+			t = atoi(o.arg);
+			if (t == 0) opt.flag |= MM_F_SPLICE_OLD;
+			else if (t == 1) opt.flag &= ~MM_F_SPLICE_OLD;
+		} else if (c == 'o') {
 			if (strcmp(o.arg, "-") != 0) {
 				if (freopen(o.arg, "wb", stdout) == NULL) {
 					fprintf(stderr, "[ERROR]\033[1;31m failed to write the output to file '%s'\033[0m: %s\n", o.arg, strerror(errno));
@@ -209,9 +227,8 @@ int main(int argc, char *argv[])
 		else if (c == 309) mm_dbg_flag |= MM_DBG_PRINT_QNAME | MM_DBG_PRINT_ALN_SEQ, n_threads = 1; // --print-aln-seq
 		else if (c == 310) opt.flag |= MM_F_SPLICE; // --splice
 		else if (c == 312) opt.flag |= MM_F_NO_LJOIN; // --no-long-join
-		else if (c == 313) opt.flag |= MM_F_SR; // --sr
 		else if (c == 317) opt.end_bonus = atoi(o.arg); // --end-bonus
-		else if (c == 318) opt.flag |= MM_F_INDEPEND_SEG; // --no-pairing
+		else if (c == 318) opt.flag |= MM_F_INDEPEND_SEG; // --no-pairing (deprecated)
 		else if (c == 320) ipt.flag |= MM_I_NO_SEQ; // --idx-no-seq
 		else if (c == 321) opt.anchor_ext_shift = atoi(o.arg); // --end-seed-pen
 		else if (c == 322) opt.flag |= MM_F_FOR_ONLY; // --for-only
@@ -227,7 +244,7 @@ int main(int argc, char *argv[])
 		else if (c == 336) opt.flag |= MM_F_HARD_MLEVEL; // --hard-mask-level
 		else if (c == 337) opt.max_sw_mat = mm_parse_num(o.arg); // --cap-sw-mat
 		else if (c == 338) opt.max_qlen = mm_parse_num(o.arg); // --max-qlen
-		else if (c == 340) junc_bed = o.arg; // --junc-bed
+		else if (c == 340) fn_bed_junc = o.arg; // --junc-bed
 		else if (c == 341) opt.junc_bonus = atoi(o.arg); // --junc-bonus
 		else if (c == 342) opt.flag |= MM_F_SAM_HIT_ONLY; // --sam-hit-only
 		else if (c == 343) opt.chain_gap_scale = atof(o.arg); // --chain-gap-scale
@@ -240,10 +257,31 @@ int main(int argc, char *argv[])
 		else if (c == 350) opt.q_occ_frac = atof(o.arg); // --q-occ-frac
 		else if (c == 352) mm_dbg_flag |= MM_DBG_PRINT_CHAIN; // --print-chains
 		else if (c == 353) opt.flag |= MM_F_NO_HASH_NAME; // --no-hash-name
-		else if (c == 354) vcf_with_variants = o.arg; // --vcf-file-with-variants
-        else if (c == 355) ipt.flag |= MM_PARSE_HT;  // --parse-haplotype
+		else if (c == 354) opt.flag |= MM_F_SECONDARY_SEQ; // --secondary-seq
+		else if (c == 355) opt.flag |= MM_F_OUT_DS; // --ds
+		else if (c == 356) opt.rmq_inner_dist = mm_parse_num(o.arg); // --rmq-inner
+		else if (c == 357) fn_spsc = o.arg; // --spsc
+		else if (c == 360) opt.jump_min_match = mm_parse_num(o.arg); // --jump-min-match
+		else if (c == 361) opt.flag |= MM_F_OUT_JUNC | MM_F_CIGAR; // --write-junc
+		else if (c == 362) fn_bed_pass1 = o.arg; // --jump-pass1
+		else if (c == 501) mm_dbg_flag |= MM_DBG_SEED_FREQ; // --dbg-seed-occ
+		else if (c == 363) spsc_scale = atof(o.arg); // --spsc-scale
+		else if (c == 358 || c == 364) opt.junc_pen = atoi(o.arg); // --junc-pen or --spsc0
+        else if (c == 700) vcf_with_variants = o.arg; // --vcf-file-with-variants
+        else if (c == 701) ipt.flag |= MM_PARSE_HT;  // --parse-haplotype
 		else if (c == 330) {
 			fprintf(stderr, "[WARNING] \033[1;31m --lj-min-ratio has been deprecated.\033[0m\n");
+		} else if (c == 313) { // --sr
+			if (o.arg == 0 || strcmp(o.arg, "dna") == 0) {
+				opt.flag |= MM_F_SR;
+			} else if (strcmp(o.arg, "rna") == 0) {
+				opt.flag |= MM_F_SR_RNA;
+			} else if (strcmp(o.arg, "no") == 0) {
+				opt.flag &= ~(uint64_t)(MM_F_SR|MM_F_SR_RNA);
+			} else if (mm_verbose >= 2) {
+				opt.flag |= MM_F_SR;
+				fprintf(stderr, "[WARNING]\033[1;31m --sr only takes 'dna' or 'rna'. Invalid values are assumed to be 'dna'.\033[0m\n");
+			}
 		} else if (c == 314) { // --frag
 			yes_or_no(&opt, MM_F_FRAG_MODE, o.longidx, o.arg, 1);
 		} else if (c == 315) { // --secondary
@@ -266,7 +304,16 @@ int main(int argc, char *argv[])
 		} else if (c == 326) { // --dual
 			yes_or_no(&opt, MM_F_NO_DUAL, o.longidx, o.arg, 0);
 		} else if (c == 347) { // --rmq
-			yes_or_no(&opt, MM_F_RMQ, o.longidx, o.arg, 1);
+			if (o.arg) yes_or_no(&opt, MM_F_RMQ, o.longidx, o.arg, 1);
+			else opt.flag |= MM_F_RMQ;
+		} else if (c == 359) { // --pairing
+			if (strcmp(o.arg, "no") == 0) opt.flag |= MM_F_INDEPEND_SEG;
+			else if (strcmp(o.arg, "weak") == 0) opt.flag |= MM_F_WEAK_PAIRING, opt.flag &= ~(uint64_t)MM_F_INDEPEND_SEG;
+			else {
+				if (strcmp(o.arg, "strong") != 0 && mm_verbose >= 2)
+					fprintf(stderr, "[WARNING]\033[1;31m unrecognized argument for --pairing; assuming 'strong'.\033[0m\n");
+				opt.flag &= ~(uint64_t)(MM_F_INDEPEND_SEG|MM_F_WEAK_PAIRING);
+			}
 		} else if (c == 'S') {
 			opt.flag |= MM_F_OUT_CS | MM_F_CIGAR | MM_F_OUT_CS_LONG;
 			if (mm_verbose >= 2)
@@ -307,10 +354,6 @@ int main(int argc, char *argv[])
 			if (*s == ',') opt.e2 = strtol(s + 1, &s, 10);
 		}
 	}
-	if ((opt.flag & MM_F_SPLICE) && (opt.flag & MM_F_FRAG_MODE)) {
-		fprintf(stderr, "[ERROR]\033[1;31m --splice and --frag should not be specified at the same time.\033[0m\n");
-		return 1;
-	}
 	if (!fnw && !(opt.flag&MM_F_CIGAR))
 		ipt.flag |= MM_I_NO_SEQ;
 	if (mm_check_opt(&ipt, &opt) < 0)
@@ -327,7 +370,7 @@ int main(int argc, char *argv[])
 		fprintf(fp_help, "    -H           use homopolymer-compressed k-mer (preferrable for PacBio)\n");
 		fprintf(fp_help, "    -k INT       k-mer size (no larger than 28) [%d]\n", ipt.k);
 		fprintf(fp_help, "    -w INT       minimizer window size [%d]\n", ipt.w);
-		fprintf(fp_help, "    -I NUM       split index for every ~NUM input bases [4G]\n");
+		fprintf(fp_help, "    -I NUM       split index for every ~NUM input bases [8G]\n");
 		fprintf(fp_help, "    -d FILE      dump index to FILE []\n");
 		fprintf(fp_help, "    --vcf-file-with-variants FILE      pass VCF FILE to modify index []\n");
         fprintf(fp_help, "    --parse-haplotype parse haplotypes from VCF to generate real SNP combinations, otherwise use all.\n");
@@ -351,6 +394,8 @@ int main(int argc, char *argv[])
 		fprintf(fp_help, "    -z INT[,INT] Z-drop score and inversion Z-drop score [%d,%d]\n", opt.zdrop, opt.zdrop_inv);
 		fprintf(fp_help, "    -s INT       minimal peak DP alignment score [%d]\n", opt.min_dp_max);
 		fprintf(fp_help, "    -u CHAR      how to find GT-AG. f:transcript strand, b:both strands, n:don't match GT-AG [n]\n");
+		fprintf(fp_help, "    -J INT       splice mode. 0: original minimap2 model; 1: miniprot model [1]\n");
+		fprintf(fp_help, "    -j FILE      junctions in BED12 to extend *short* RNA-seq alignment []\n");
 		fprintf(fp_help, "  Input/Output:\n");
 		fprintf(fp_help, "    -a           output in the SAM format (PAF by default)\n");
 		fprintf(fp_help, "    -o FILE      output alignments to FILE [stdout]\n");
@@ -358,21 +403,24 @@ int main(int argc, char *argv[])
 		fprintf(fp_help, "    -R STR       SAM read group line in a format like '@RG\\tID:foo\\tSM:bar' []\n");
 		fprintf(fp_help, "    -c           output CIGAR in PAF\n");
 		fprintf(fp_help, "    --cs[=STR]   output the cs tag; STR is 'short' (if absent) or 'long' [none]\n");
+		fprintf(fp_help, "    --ds         output the ds tag, which is an extension to cs\n");
 		fprintf(fp_help, "    --MD         output the MD tag\n");
 		fprintf(fp_help, "    --eqx        write =/X CIGAR operators\n");
 		fprintf(fp_help, "    -Y           use soft clipping for supplementary alignments\n");
+		fprintf(fp_help, "    -y           copy FASTA/Q comments to output SAM\n");
 		fprintf(fp_help, "    -t INT       number of threads [%d]\n", n_threads);
 		fprintf(fp_help, "    -K NUM       minibatch size for mapping [500M]\n");
 //		fprintf(fp_help, "    -v INT       verbose level [%d]\n", mm_verbose);
 		fprintf(fp_help, "    --version    show version number\n");
 		fprintf(fp_help, "  Preset:\n");
 		fprintf(fp_help, "    -x STR       preset (always applied before other options; see minimap2.1 for details) []\n");
-		fprintf(fp_help, "                 - map-pb/map-ont - PacBio CLR/Nanopore vs reference mapping\n");
-		fprintf(fp_help, "                 - map-hifi - PacBio HiFi reads vs reference mapping\n");
-		fprintf(fp_help, "                 - ava-pb/ava-ont - PacBio/Nanopore read overlap\n");
+		fprintf(fp_help, "                 - lr:hq - accurate long reads (error rate <1%%) against a reference genome\n");
+		fprintf(fp_help, "                 - splice/splice:hq - spliced alignment for long reads/accurate long reads\n");
+		fprintf(fp_help, "                 - splice:sr - spliced alignment for short RNA-seq reads\n");
 		fprintf(fp_help, "                 - asm5/asm10/asm20 - asm-to-ref mapping, for ~0.1/1/5%% sequence divergence\n");
-		fprintf(fp_help, "                 - splice/splice:hq - long-read/Pacbio-CCS spliced alignment\n");
-		fprintf(fp_help, "                 - sr - genomic short-read mapping\n");
+		fprintf(fp_help, "                 - sr - short reads against a reference\n");
+		fprintf(fp_help, "                 - map-pb/map-hifi/map-ont/map-iclr - CLR/HiFi/Nanopore/ICLR vs reference mapping\n");
+		fprintf(fp_help, "                 - ava-pb/ava-ont - PacBio CLR/Nanopore read overlap\n");
 		fprintf(fp_help, "\nSee `man ./minimap2.1' for detailed description of these and other advanced command-line options.\n");
 		return fp_help == stdout? 0 : 1;
 	}
@@ -423,7 +471,26 @@ int main(int argc, char *argv[])
 					__func__, realtime() - mm_realtime0, cputime() / (realtime() - mm_realtime0), mi->n_seq);
 		if (argc != o.ind + 1) mm_mapopt_update(&opt, mi);
 		if (mm_verbose >= 3) mm_idx_stat(mi);
-		if (junc_bed) mm_idx_bed_read(mi, junc_bed, 1);
+		if (fn_bed_junc) {
+			mm_idx_bed_read(mi, fn_bed_junc, 1);
+			if (mi->I == 0 && mm_verbose >= 2)
+				fprintf(stderr, "[WARNING] failed to load the junction BED file\n");
+		}
+		if (fn_bed_jump) {
+			mm_idx_jjump_read(mi, fn_bed_jump, MM_JUNC_ANNO, -1);
+			if (mi->J == 0 && mm_verbose >= 2)
+				fprintf(stderr, "[WARNING] failed to load the jump BED file\n");
+		}
+		if (fn_bed_pass1) {
+			mm_idx_jjump_read(mi, fn_bed_pass1, MM_JUNC_MISC, 5);
+			if (mi->J == 0 && mm_verbose >= 2)
+				fprintf(stderr, "[WARNING] failed to load the pass-1 jump BED file\n");
+		}
+		if (fn_spsc) {
+			mm_idx_spsc_read2(mi, fn_spsc, mm_max_spsc_bonus(&opt), spsc_scale);
+			if (mi->spsc == 0 && mm_verbose >= 2)
+				fprintf(stderr, "[WARNING] failed to load the splice score file\n");
+		}
 		if (alt_list) mm_idx_alt_read(mi, alt_list);
 		if (argc - (o.ind + 1) == 0) {
 			mm_idx_destroy(mi);
