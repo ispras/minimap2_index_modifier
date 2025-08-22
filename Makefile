@@ -2,7 +2,7 @@ CFLAGS=		-g -Wall -O2 -Wc++-compat #-fsanitize=address #-Wextra
 CPPFLAGS=	-DHAVE_KALLOC
 INCLUDES=
 OBJS=		kthread.o kalloc.o misc.o bseq.o sketch.o sdust.o options.o index.o \
-			lchain.o align.o hit.o seed.o linked_vcf_list.o map.o format.o pe.o esterr.o splitidx.o \
+			lchain.o align.o hit.o seed.o jump.o linked_vcf_list.o map.o format.o pe.o esterr.o splitidx.o \
 			ksw2_ll_sse.o
 PROG=		minimap2
 PROG_EXTRA=	sdust minimap2-lite
