@@ -6,6 +6,12 @@
 #include "bseq.h"
 #include "kseq.h"
 
+#include <htslib/hts.h>
+#include <htslib/vcf.h>
+#include <htslib/tbx.h>
+#include <htslib/kstring.h>
+#include <htslib/kseq.h>
+
 #define MM_PARENT_UNSET   (-1)
 #define MM_PARENT_TMP_PRI (-2)
 
@@ -71,6 +77,10 @@ void radix_sort_64(uint64_t *beg, uint64_t *end);
 uint32_t ks_ksmall_uint32_t(size_t n, uint32_t arr[], size_t kk);
 
 void mm_sketch(void *km, const char *str, int len, int w, int k, uint32_t rid, int is_hpc, mm128_v *p);
+void mm_idx_manipulate(mm_idx_t * mi, char *vcf_with_variants);
+void mm_idx_manipulate_phased(mm_idx_t * mi, char * fname, mm128_v *p, char * contig_name);
+void add_variants(mm_idx_t * mi, const char * CHR, char ** REF_arr, char ** ALT_arr, unsigned long * POS_all, int N_SNP, unsigned long curr_pos, mm128_v *p);
+void add_indel(mm_idx_t * mi, const char * CHR, char * REF, char * ALT, unsigned long curr_pos, unsigned long indel_pos, mm128_v *p, const char * original_ref_seq);
 
 mm_seed_t *mm_collect_matches(void *km, int *_n_m, int qlen, int max_occ, int max_max_occ, int dist, const mm_idx_t *mi, const mm128_v *mv, int64_t *n_a, int *rep_len, int *n_mini_pos, uint64_t **mini_pos);
 void mm_seed_mz_flt(void *km, mm128_v *mv, int32_t q_occ_max, float q_occ_frac);

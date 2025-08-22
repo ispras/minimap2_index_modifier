@@ -88,6 +88,8 @@ static ko_longopt_t long_options[] = {
 	{ "spsc-scale",     ko_required_argument, 363 },
 	{ "spsc0",          ko_required_argument, 364 },
 	{ "dbg-seed-occ",   ko_no_argument,       501 },
+    { "vcf-file-with-variants",ko_required_argument, 700 },
+    { "parse-haplotype",ko_no_argument,       701 },
 	{ "help",           ko_no_argument,       'h' },
 	{ "max-intron-len", ko_required_argument, 'G' },
 	{ "version",        ko_no_argument,       'V' },
@@ -136,6 +138,7 @@ int main(int argc, char *argv[])
 	mm_mapopt_t opt;
 	mm_idxopt_t ipt;
 	int i, c, n_threads = 3, n_parts, old_best_n = -1;
+	char *vcf_with_variants = 0;
 	float spsc_scale = 0.7f;
 	char *fnw = 0, *rg = 0, *fn_bed_junc = 0, *fn_bed_jump = 0, *fn_bed_pass1 = 0, *fn_spsc = 0, *s, *alt_list = 0;
 	FILE *fp_help = stderr;
@@ -264,6 +267,8 @@ int main(int argc, char *argv[])
 		else if (c == 501) mm_dbg_flag |= MM_DBG_SEED_FREQ; // --dbg-seed-occ
 		else if (c == 363) spsc_scale = atof(o.arg); // --spsc-scale
 		else if (c == 358 || c == 364) opt.junc_pen = atoi(o.arg); // --junc-pen or --spsc0
+        else if (c == 700) vcf_with_variants = o.arg; // --vcf-file-with-variants
+        else if (c == 701) ipt.flag |= MM_PARSE_HT;  // --parse-haplotype
 		else if (c == 330) {
 			fprintf(stderr, "[WARNING] \033[1;31m --lj-min-ratio has been deprecated.\033[0m\n");
 		} else if (c == 313) { // --sr
@@ -367,6 +372,8 @@ int main(int argc, char *argv[])
 		fprintf(fp_help, "    -w INT       minimizer window size [%d]\n", ipt.w);
 		fprintf(fp_help, "    -I NUM       split index for every ~NUM input bases [8G]\n");
 		fprintf(fp_help, "    -d FILE      dump index to FILE []\n");
+		fprintf(fp_help, "    --vcf-file-with-variants FILE      pass VCF FILE to modify index []\n");
+        fprintf(fp_help, "    --parse-haplotype parse haplotypes from VCF to generate real SNP combinations, otherwise use all.\n");
 		fprintf(fp_help, "  Mapping:\n");
 		fprintf(fp_help, "    -f FLOAT     filter out top FLOAT fraction of repetitive minimizers [%g]\n", opt.mid_occ_frac);
 		fprintf(fp_help, "    -g NUM       stop chain enlongation if there are no minimizers in INT-bp [%d]\n", opt.max_gap);
@@ -434,7 +441,7 @@ int main(int argc, char *argv[])
 	}
 	if (opt.best_n == 0 && (opt.flag&MM_F_CIGAR) && mm_verbose >= 2)
 		fprintf(stderr, "[WARNING]\033[1;31m `-N 0' reduces alignment accuracy. Please use --secondary=no to suppress secondary alignments.\033[0m\n");
-	while ((mi = mm_idx_reader_read(idx_rdr, n_threads)) != 0) {
+	while ((mi = mm_idx_reader_read(idx_rdr, n_threads, vcf_with_variants)) != 0) {
 		int ret;
 		if ((opt.flag & MM_F_CIGAR) && (mi->flag & MM_I_NO_SEQ)) {
 			fprintf(stderr, "[ERROR] the prebuilt index doesn't contain sequences.\n");

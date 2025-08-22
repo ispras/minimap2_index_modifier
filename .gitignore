@@ -1,3 +1,5 @@
+.vscode/
+htslib/
 .cproject
 .project
 .*.swp

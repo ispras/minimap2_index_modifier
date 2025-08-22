@@ -1,12 +1,12 @@
-CFLAGS=		-g -Wall -Wc++-compat -O0# -O2 -Wextra 
+CFLAGS=		-g -Wall -O2 -Wc++-compat #-fsanitize=address #-Wextra
 CPPFLAGS=	-DHAVE_KALLOC
 INCLUDES=
 OBJS=		kthread.o kalloc.o misc.o bseq.o sketch.o sdust.o options.o index.o \
-			lchain.o align.o hit.o seed.o jump.o map.o format.o pe.o esterr.o splitidx.o \
+			lchain.o align.o hit.o seed.o linked_vcf_list.o map.o format.o pe.o esterr.o splitidx.o \
 			ksw2_ll_sse.o
 PROG=		minimap2
 PROG_EXTRA=	sdust minimap2-lite
-LIBS=		-lm -lz -lpthread
+LIBS=		-lm -lz -lpthread -lhts
 
 ifneq ($(aarch64),)
 	arm_neon=1
@@ -57,7 +57,7 @@ minimap2-lite:example.o libminimap2.a
 libminimap2.a:$(OBJS)
 		$(AR) -csru $@ $(OBJS)
 
-sdust:sdust.c kalloc.o kalloc.h kdq.h kvec.h kseq.h ketopt.h sdust.h
+sdust:sdust.c kalloc.o kalloc.h kdq.h kvec.h kseq.h ketopt.h sdust.h linked_vcf_list.h
 		$(CC) -D_SDUST_MAIN $(CFLAGS) $< kalloc.o -o $@ -lz
 
 # SSE-specific targets on x86/x86_64
@@ -133,5 +133,6 @@ options.o: mmpriv.h minimap.h bseq.h kseq.h
 pe.o: mmpriv.h minimap.h bseq.h kseq.h kvec.h kalloc.h ksort.h
 sdust.o: kalloc.h kdq.h kvec.h sdust.h
 seed.o: mmpriv.h minimap.h bseq.h kseq.h kalloc.h ksort.h
-sketch.o: kvec.h kalloc.h mmpriv.h minimap.h bseq.h kseq.h
+linked_vcf_list.o: mmpriv.h minimap.h linked_vcf_list.h
+sketch.o: kvec.h kalloc.h mmpriv.h minimap.h bseq.h kseq.h linked_vcf_list.h
 splitidx.o: mmpriv.h minimap.h bseq.h kseq.h

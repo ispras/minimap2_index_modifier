@@ -1,156 +1,7 @@
-[![GitHub Downloads](https://img.shields.io/github/downloads/lh3/minimap2/total.svg?style=social&logo=github&label=Download)](https://github.com/lh3/minimap2/releases)
-[![BioConda Install](https://img.shields.io/conda/dn/bioconda/minimap2.svg?style=flag&label=BioConda%20install)](https://anaconda.org/bioconda/minimap2)
-[![PyPI](https://img.shields.io/pypi/v/mappy.svg?style=flat)](https://pypi.python.org/pypi/mappy)
-[![Build Status](https://github.com/lh3/minimap2/actions/workflows/ci.yaml/badge.svg)](https://github.com/lh3/minimap2/actions)
-## <a name="started"></a>Getting Started
-```sh
-git clone https://github.com/lh3/minimap2
-cd minimap2 && make
-# long sequences against a reference genome
-./minimap2 -a test/MT-human.fa test/MT-orang.fa > test.sam
-# create an index first and then map
-./minimap2 -x map-ont -d MT-human-ont.mmi test/MT-human.fa
-./minimap2 -a MT-human-ont.mmi test/MT-orang.fa > test.sam
-# use presets (no test data)
-./minimap2 -ax map-pb ref.fa pacbio.fq.gz > aln.sam       # PacBio CLR genomic reads
-./minimap2 -ax map-ont ref.fa ont.fq.gz > aln.sam         # Oxford Nanopore genomic reads
-./minimap2 -ax map-hifi ref.fa pacbio-ccs.fq.gz > aln.sam # PacBio HiFi/CCS genomic reads (v2.19+)
-./minimap2 -ax lr:hq ref.fa ont-Q20.fq.gz > aln.sam       # Nanopore Q20 genomic reads (v2.27+)
-./minimap2 -ax sr ref.fa read1.fa read2.fa > aln.sam      # short genomic paired-end reads
-./minimap2 -ax splice ref.fa rna-reads.fa > aln.sam       # spliced long reads (strand unknown)
-./minimap2 -ax splice -uf -k14 ref.fa reads.fa > aln.sam  # noisy Nanopore direct RNA-seq
-./minimap2 -ax splice:hq -uf ref.fa query.fa > aln.sam    # PacBio Kinnex/Iso-seq (RNA-seq)
-./minimap2 -ax splice --junc-bed=anno.bed12 ref.fa query.fa > aln.sam  # use annotated junctions
-./minimap2 -ax splice:sr ref.fa r1.fq r2.fq > aln.sam     # short-read RNA-seq (v2.29+)
-./minimap2 -ax splice:sr -j anno.bed12 ref.fa r1.fq r2.fq > aln.sam
-./minimap2 -cx asm5 asm1.fa asm2.fa > aln.paf             # intra-species asm-to-asm alignment
-./minimap2 -x ava-pb reads.fa reads.fa > overlaps.paf     # PacBio read overlap
-./minimap2 -x ava-ont reads.fa reads.fa > overlaps.paf    # Nanopore read overlap
-# man page for detailed command line options
-man ./minimap2.1
-```
-
-## Table of Contents
-
-- [Getting Started](#started)
-- [Users' Guide](#uguide)
-  - [Installation](#install)
-  - [General usage](#general)
-  - [Use cases](#cases)
-    - [Map long noisy genomic reads](#map-long-genomic)
-    - [Map long mRNA/cDNA reads](#map-long-splice)
-    - [Find overlaps between long reads](#long-overlap)
-    - [Map short genomic reads](#short-genomic)
-    - [Map short RNA-seq reads](#short-rna-seq)
-    - [Full genome/assembly alignment](#full-genome)
-  - [Advanced features](#advanced)
-    - [Working with >65535 CIGAR operations](#long-cigar)
-    - [The cs optional tag](#cs)
-    - [Working with the PAF format](#paftools)
-  - [Algorithm overview](#algo)
-  - [Getting help](#help)
-  - [Citing minimap2](#cite)
-- [Developers' Guide](#dguide)
-- [Limitations](#limit)
-
-## <a name="uguide"></a>Users' Guide
-
-Minimap2 is a versatile sequence alignment program that aligns DNA or mRNA
-sequences against a large reference database. Typical use cases include: (1)
-mapping PacBio or Oxford Nanopore genomic reads to the human genome; (2)
-finding overlaps between long reads with error rate up to ~15%; (3)
-splice-aware alignment of PacBio Iso-Seq or Nanopore cDNA or Direct RNA reads
-against a reference genome; (4) aligning Illumina single- or paired-end reads;
-(5) assembly-to-assembly alignment; (6) full-genome alignment between two
-closely related species with divergence below ~15%.
-
-For ~10kb noisy reads sequences, minimap2 is tens of times faster than
-mainstream long-read mappers such as BLASR, BWA-MEM, NGMLR and GMAP. It is more
-accurate on simulated long reads and produces biologically meaningful alignment
-ready for downstream analyses. For >100bp Illumina short reads, minimap2 is
-three times as fast as BWA-MEM and Bowtie2, and as accurate on simulated data.
-Detailed evaluations are available from the [minimap2 paper][doi] or the
-[preprint][preprint].
-
-### <a name="install"></a>Installation
-
-Minimap2 is optimized for x86-64 CPUs. You can acquire precompiled binaries from
-the [release page][release] with:
-```sh
-curl -L https://github.com/lh3/minimap2/releases/download/v2.30/minimap2-2.30_x64-linux.tar.bz2 | tar -jxvf -
-./minimap2-2.30_x64-linux/minimap2
-```
-If you want to compile from the source, you need to have a C compiler, GNU make
-and zlib development files installed. Then type `make` in the source code
-directory to compile. If you see compilation errors, try `make sse2only=1`
-to disable SSE4 code, which will make minimap2 slightly slower.
-
-Minimap2 also works with ARM CPUs supporting the NEON instruction sets. To
-compile for 32 bit ARM architectures (such as ARMv7), use `make arm_neon=1`. To
-compile for for 64 bit ARM architectures (such as ARMv8), use `make arm_neon=1
-aarch64=1`.
-
-Minimap2 can use [SIMD Everywhere (SIMDe)][simde] library for porting
-implementation to the different SIMD instruction sets. To compile using SIMDe,
-use `make -f Makefile.simde`. To compile for ARM CPUs, use `Makefile.simde`
-with the ARM related command lines given above.
-
-### <a name="general"></a>General usage
-
-Without any options, minimap2 takes a reference database and a query sequence
-file as input and produce approximate mapping, without base-level alignment
-(i.e. coordinates are only approximate and no CIGAR in output), in the [PAF format][paf]:
-```sh
-minimap2 ref.fa query.fq > approx-mapping.paf
-```
-You can ask minimap2 to generate CIGAR at the `cg` tag of PAF with:
-```sh
-minimap2 -c ref.fa query.fq > alignment.paf
-```
-or to output alignments in the [SAM format][sam]:
-```sh
-minimap2 -a ref.fa query.fq > alignment.sam
-```
-Minimap2 seamlessly works with gzip'd FASTA and FASTQ formats as input. You
-don't need to convert between FASTA and FASTQ or decompress gzip'd files first.
-
-For the human reference genome, minimap2 takes a few minutes to generate a
-minimizer index for the reference before mapping. To reduce indexing time, you
-can optionally save the index with option **-d** and replace the reference
-sequence file with the index file on the minimap2 command line:
-```sh
-minimap2 -d ref.mmi ref.fa                     # indexing
-minimap2 -a ref.mmi reads.fq > alignment.sam   # alignment
-```
-***Importantly***, it should be noted that once you build the index, indexing
-parameters such as **-k**, **-w**, **-H** and **-I** can't be changed during
-mapping. If you are running minimap2 for different data types, you will
-probably need to keep multiple indexes generated with different parameters.
-This makes minimap2 different from BWA which always uses the same index
-regardless of query data types.
-
-### <a name="cases"></a>Use cases
-
-Minimap2 uses the same base algorithm for all applications. However, due to the
-different data types it supports (e.g. short vs long reads; DNA vs mRNA reads),
-minimap2 needs to be tuned for optimal performance and accuracy. It is usually
-recommended to choose a preset with option **-x**, which sets multiple
-parameters at the same time. The default setting is the same as `map-ont`.
-
-#### <a name="map-long-genomic"></a>Map long noisy genomic reads
-
-```sh
-minimap2 -ax map-pb  ref.fa pacbio-reads.fq > aln.sam   # for PacBio CLR reads
-minimap2 -ax map-ont ref.fa ont-reads.fq > aln.sam      # for Oxford Nanopore reads
-minimap2 -ax map-iclr ref.fa iclr-reads.fq > aln.sam    # for Illumina Complete Long Reads
-```
-The difference between `map-pb` and `map-ont` is that `map-pb` uses
-homopolymer-compressed (HPC) minimizers as seeds, while `map-ont` uses ordinary
-minimizers as seeds. Empirical evaluation suggests HPC minimizers improve
-performance and sensitivity when aligning PacBio CLR reads, but hurt when aligning
-Nanopore reads. `map-iclr` uses an adjusted alignment scoring matrix that
-accounts for the low overall error rate in the reads, with transversion errors
-being less frequent than transitions.
+Minimap2_index_modifier
+=======================
+Minimap2_index_modifier is a fork of alignment tool [minimap2](https://github.com/lh3/minimap2).
+Unlike the original tool, this can use the variants defined in the VCF file when generating the index, for more accurate alignment.
 
 #### <a name="map-long-splice"></a>Map long mRNA/cDNA reads
 
@@ -174,8 +25,9 @@ or the last exons.
 
 Minimap2 rates an alignment by the score of the max-scoring sub-segment,
 *excluding* introns, and marks the best alignment as primary in SAM. When a
-spliced gene also has unspliced pseudogenes, minimap2 slightly prefers
-the spliced alignment. By default, minimap2 outputs up to five secondary
+spliced gene also has unspliced pseudogenes, minimap2 does not intentionally
+prefer spliced alignment, though in practice it more often marks the spliced
+alignment as the primary. By default, minimap2 outputs up to five secondary
 alignments (i.e. likely pseudogenes in the context of RNA-seq mapping). This
 can be tuned with option **-N**.
 
@@ -194,7 +46,7 @@ signal. If you are studying SIRV, you may apply `--splice-flank=no` to let
 minimap2 only model GT..AG, ignoring the additional base.
 
 Since v2.17, minimap2 can optionally take annotated genes as input and
-prioritize on annotated splice junctions. To use this feature, you can 
+prioritize on annotated splice junctions. To use this feature, you can
 ```sh
 paftools.js gff2bed anno.gff > anno.bed
 minimap2 -ax splice --junc-bed anno.bed ref.fa query.fa > aln.sam
@@ -205,10 +57,6 @@ BED format, or the BED12 format. With the `--junc-bed` option, minimap2 adds a
 bonus score (tuned by `--junc-bonus`) if an aligned junction matches a junction
 in the annotation. Option `--junc-bed` also takes 5-column BED, including the
 strand field. In this case, each line indicates an oriented junction.
-
-**Note:** `--junc-bed` is intended for long noisy RNA-seq reads only.
-Applying the option to short RNA-seq reads would increase run time with little
-improvement to junction accuracy.
 
 #### <a name="long-overlap"></a>Find overlaps between long reads
 
@@ -222,7 +70,7 @@ the overlapping mode because it is slow and may produce false positive
 overlaps. However, if performance is not a concern, you may try to add `-a` or
 `-c` anyway.
 
-#### <a name="short-genomic"></a>Map short genomic reads
+#### <a name="short-genomic"></a>Map short accurate genomic reads
 
 ```sh
 minimap2 -ax sr ref.fa reads-se.fq > aln.sam           # single-end alignment
@@ -235,18 +83,8 @@ be paired if they are adjacent in the input stream and have the same name (with
 the `/[0-9]` suffix trimmed if present). Single- and paired-end reads can be
 mixed.
 
-#### <a name="short-rna-seq"></a>Map short RNA-seq reads
-
-```sh
-minimap2 -ax splice:sr ref.fa reads-se.fq.gz > aln.sam           # single-end
-minimap2 -ax splice:sr ref.fa r1.fq.gz r2.fq.gz > aln.sam        # paired-end
-minimap2 -ax splice:sr -j anno.bed ref.fa r1.fq r2.fq > aln.sam  # use annotation
-# 2-pass alignment
-minimap2 -x splice:sr -j anno.bed --write-junc ref.fa r1.fq r2.fq > junc.bed
-minimap2 -ax splice:sr -j anno.bed --pass1=junc.bed ref.fa r1.fq r2.fq > aln.sam
-```
-The new preset `splice:sr` was added in v2.29. It functions similarly to `sr`
-except that it performs spliced alignment.
+Minimap2 does not work well with short spliced reads. There are many capable
+RNA-seq mappers for short reads.
 
 #### <a name="full-genome"></a>Full genome/assembly alignment
 
@@ -369,11 +207,6 @@ If you use minimap2 in your work, please cite:
 > Li, H. (2018). Minimap2: pairwise alignment for nucleotide sequences.
 > *Bioinformatics*, **34**:3094-3100. [doi:10.1093/bioinformatics/bty191][doi]
 
-and/or:
-
-> Li, H. (2021). New strategies to improve minimap2 alignment accuracy.
-> *Bioinformatics*, **37**:4572-4574. [doi:10.1093/bioinformatics/btab705][doi2]
-
 ## <a name="dguide"></a>Developers' Guide
 
 Minimap2 is not only a command line tool, but also a programming library.
@@ -423,6 +256,5 @@ mappy` or [from BioConda][mappyconda] via `conda install -c bioconda mappy`.
 [manpage]: https://lh3.github.io/minimap2/minimap2.html
 [manpage-cs]: https://lh3.github.io/minimap2/minimap2.html#10
 [doi]: https://doi.org/10.1093/bioinformatics/bty191
-[doi2]: https://doi.org/10.1093/bioinformatics/btab705
-[simde]: https://github.com/nemequ/simde
+[smide]: https://github.com/nemequ/simde
 [unimap]: https://github.com/lh3/unimap

@@ -6,6 +6,14 @@
 #include "kvec.h"
 #include "mmpriv.h"
 
+#include "linked_vcf_list.h"
+
+#include <htslib/hts.h>
+#include <htslib/vcf.h>
+#include <htslib/tbx.h>
+#include <htslib/kstring.h>
+#include <htslib/kseq.h>
+
 unsigned char seq_nt4_table[256] = {
 	0, 1, 2, 3,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
 	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
@@ -81,7 +89,7 @@ void mm_sketch(void *km, const char *str, int len, int w, int k, uint32_t rid, i
 	mm128_t buf[256], min = { UINT64_MAX, UINT64_MAX };
 	tiny_queue_t tq;
 
-	assert(len > 0 && (w > 0 && w < 256) && (k > 0 && k <= 28)); // 56 bits for k-mer; could use long k-mers, but 28 enough in practice
+	assert(len > 0 && (w > 0 && w < 256) && (k > 0 && k <= 128)); // 56 bits for k-mer; could use long k-mers, but 28 enough in practice
 	memset(buf, 0xff, w * 16);
 	memset(&tq, 0, sizeof(tiny_queue_t));
 	kv_resize(mm128_t, km, *p, p->n + len/w);
@@ -140,4 +148,408 @@ void mm_sketch(void *km, const char *str, int len, int w, int k, uint32_t rid, i
 	}
 	if (min.x != UINT64_MAX)
 		kv_push(mm128_t, km, *p, min);
+}
+
+static void process_vcf_record(bcf1_t *rec, bcf_hdr_t *hdr, mm_idx_t *mi, mm128_v *p) {
+    // Duplicate the record
+    bcf1_t *rec_tmp = bcf_dup(rec);
+    if (!rec_tmp) {
+        fprintf(stderr, "ERROR: Failed to duplicate VCF record\n");
+        return;
+    }
+
+    // Allocate memory and copy REF allele
+    char *REF = (char *)calloc(strlen(rec->d.allele[0]) + 1, sizeof(char));
+    if (!REF) {
+        fprintf(stderr, "ERROR: Memory allocation failed for REF\n");
+        bcf_destroy(rec_tmp);
+        return;
+    }
+    strncpy(REF, rec->d.allele[0], strlen(rec->d.allele[0]));
+    REF[strlen(rec->d.allele[0])] = '\0';
+
+    // Allocate memory and copy ALT allele (assumes only one ALT allele)
+    char *ALT = NULL;
+    if (rec->n_allele > 1) {
+        ALT = (char *)calloc(strlen(rec->d.allele[1]) + 1, sizeof(char));
+        if (!ALT) {
+            fprintf(stderr, "ERROR: Memory allocation failed for ALT\n");
+            free(REF);
+            bcf_destroy(rec_tmp);
+            return;
+        }
+        strncpy(ALT, rec->d.allele[1], strlen(rec->d.allele[1]));
+        ALT[strlen(rec->d.allele[1])] = '\0';
+    }
+    else {
+        // If no ALT allele is present, skip this record
+        free(REF);
+        bcf_destroy(rec_tmp);
+        return;
+    }
+
+    // Insert the record into the linked list for later processing
+    insertatbegin((unsigned long)rec_tmp->pos, rec_tmp, rec_tmp->rid, REF, ALT);
+}
+
+void read_vcf(mm_idx_t *mi, char *fname, mm128_v *p, char *contig_name) {
+    int ret;
+    kstring_t str = {0, 0, 0};
+
+    // Open the VCF file
+    htsFile *fp = hts_open(fname, "rb");
+    if (!fp) {
+        fprintf(stderr, "ERROR: Failed to open VCF file %s\n", fname);
+        return;
+    }
+
+    // Read the VCF header
+    bcf_hdr_t *hdr = bcf_hdr_read(fp);
+    if (!hdr) {
+        fprintf(stderr, "ERROR: Failed to read header from VCF file %s\n", fname);
+        hts_close(fp);
+        return;
+    }
+
+    // Load the index for the VCF file
+    tbx_t *idx = tbx_index_load(fname);
+    if (!idx) {
+        // Index not found; log a warning and proceed if possible
+        fprintf(stderr, "WARNING: Index not found for VCF file %s\n", fname);
+        bcf_hdr_destroy(hdr);
+        hts_close(fp);
+        return;
+    }
+
+    // Create an iterator for the specified contig
+    hts_itr_t *itr = tbx_itr_querys(idx, contig_name);
+    if (!itr) {
+        //fprintf(stderr, "WARNING: No records found for contig %s in VCF file %s\n", contig_name, fname);
+        tbx_destroy(idx);
+        bcf_hdr_destroy(hdr);
+        hts_close(fp);
+        return;
+    }
+
+    // Initialize a VCF record structure
+    bcf1_t *rec = bcf_init();
+    if (!rec) {
+        fprintf(stderr, "ERROR: Failed to initialize VCF record structure\n");
+        tbx_itr_destroy(itr);
+        tbx_destroy(idx);
+        bcf_hdr_destroy(hdr);
+        hts_close(fp);
+        return;
+    }
+
+    // Iterate through each record in the specified contig
+    while ((ret = tbx_itr_next(fp, idx, itr, &str)) > 0) {
+        // Parse the VCF record
+        vcf_parse(&str, hdr, rec);
+        bcf_unpack(rec, BCF_UN_STR);
+        bcf_unpack(rec, BCF_UN_INFO);
+
+        // Process the record to extract REF and ALT alleles
+        process_vcf_record(rec, hdr, mi, p);
+
+        // Reset the record for the next iteration
+        bcf_empty(rec);
+    }
+
+    // Process the linked list of variants if not empty
+    if (!isListEmpty()) {
+        handleGTList(mi, hdr, p);
+        deleteList();
+    }
+
+    // Clean up
+    bcf_destroy(rec);
+    bcf_itr_destroy(itr);
+    tbx_destroy(idx);
+    bcf_hdr_destroy(hdr);
+    hts_close(fp);
+}
+
+void mm_idx_manipulate_phased(mm_idx_t * mi, char * fname, mm128_v *p, char * contig_name) {
+    read_vcf(mi, fname, p, contig_name);
+}
+
+//REF - REF (for control)
+//ALT - ALT
+//curr_pos ulong - position
+//CHR - chromosome
+void add_indel(mm_idx_t * mi, const char * CHR, char * REF, char * ALT, unsigned long curr_pos, unsigned long indel_pos, mm128_v *p, const char * original_ref_seq)
+{
+    const char *contig_name = CHR;
+    const unsigned long position = curr_pos;
+
+    //Find seq
+    uint64_t contig_offset = 0;
+    int seq_num = -1;
+    for (int i = 0; i < mi->n_seq; i++) {
+        if (strcmp(contig_name, mi->seq[i].name) == 0) {
+            contig_offset = mi->seq[i].offset;
+            seq_num = i;
+            break;
+        }
+    }
+    // Error if no contigs in fasta
+    if(seq_num == -1) {
+        printf("ERROR Contig %s id not found in reference\n", contig_name);
+        return;
+    }
+
+    int IN_CHUNK_POSITION = (contig_offset + position - 1) % 8;
+    int SIDE_SIZE = (mi->k - 1) + mi->w;
+    // Calculate number of chunks:
+    // side chunks: take k-mer size, subtract 1 and add window size
+    // divided by chunk size and multiplied by 2 as it has 2 sides, and one for center
+    int SEQ_CHUNK_NUMBER = SIDE_SIZE / 8 * 2 + 1;
+    // add extra two side chunks if (mi->k - 1 + 10) is not a multiple of 8
+    int EXTRA_GAP = (8 - SIDE_SIZE % 8) % 8;
+    SEQ_CHUNK_NUMBER = (EXTRA_GAP) ? SEQ_CHUNK_NUMBER + 2 : SEQ_CHUNK_NUMBER;
+
+    int ref_len = strlen(REF);
+    int alt_len = strlen(ALT);
+
+    if(ref_len == 1 && alt_len > 1 && alt_len < mi->k) {
+        char * new_ref_seq;
+        new_ref_seq = (char*)malloc(sizeof(char) * (SEQ_CHUNK_NUMBER * 8 + 1 + (alt_len - 1)));
+
+        memcpy(new_ref_seq, original_ref_seq, SEQ_CHUNK_NUMBER * 8 + 1);
+        memcpy(new_ref_seq, original_ref_seq, EXTRA_GAP + SIDE_SIZE + IN_CHUNK_POSITION);
+
+        new_ref_seq[EXTRA_GAP + SIDE_SIZE + IN_CHUNK_POSITION] = '\0';
+        new_ref_seq = strcat(new_ref_seq, ALT);
+        new_ref_seq = strcat(new_ref_seq, &original_ref_seq[EXTRA_GAP + SIDE_SIZE + IN_CHUNK_POSITION + 1]);
+
+        //Finds minimizer in window
+        mm128_v minimizer_array = {0, 0, 0};
+        mm_sketch(0, &new_ref_seq[EXTRA_GAP + IN_CHUNK_POSITION], SIDE_SIZE * 2 + 1 + (alt_len - 1),
+                  mi->w, mi->k, 0, mi->flag & MM_I_HPC, &minimizer_array);
+
+        for (int i = 0; i < minimizer_array.n; i++) {
+            if (minimizer_array.a[i].y < SIDE_SIZE * 2) continue;
+            if (minimizer_array.a[i].y > (SIDE_SIZE + mi->k) * 2 - 1 + (alt_len - 1) * 2) continue;
+            minimizer_array.a[i].y = ((uint64_t)seq_num << 32) + (minimizer_array.a[i].y % 2) +
+                                      (position - SIDE_SIZE - 1 + minimizer_array.a[i].y / 2) * 2;
+
+            kv_push(mm128_t, 0, *p, minimizer_array.a[i]);
+        }
+    } else if (ref_len > 1 && alt_len == 1) {
+        int EXT_CHUNK_COUNT = ((ref_len - 2) / 8 > SEQ_CHUNK_NUMBER / 2) ? SEQ_CHUNK_NUMBER / 2 + 1: (ref_len - 2) / 8 + 1;
+
+        char * original_ref_seq_ext = (char*)malloc(sizeof(char) * (8 * EXT_CHUNK_COUNT + 1));
+        original_ref_seq_ext[8 * EXT_CHUNK_COUNT] = '\0';
+
+        for (int i = 0; i < EXT_CHUNK_COUNT; i++) {
+            uint32_t ext_seq;
+            uint32_t current_chunk = (contig_offset + position - 1) / 8 + (SEQ_CHUNK_NUMBER / 2) + i; // "+"
+
+            // Out of bounds
+            if ((contig_offset == 0 && (position - 1) / 8 + (SEQ_CHUNK_NUMBER / 2) + i + 1 < 0) ||
+                (current_chunk + 1) * 8 >= contig_offset + mi->seq[seq_num].len || (current_chunk + 2) * 8 <= contig_offset)
+
+                ext_seq = 1145324612; // ALL N
+            else {
+                ext_seq = mi->S[current_chunk + 1];
+                // At left bound
+                if ((current_chunk + 1) * 8 < contig_offset && (current_chunk + 2) * 8 > contig_offset) {
+                    if (contig_offset % 8 == 0)
+                        ext_seq = 1145324612; // ALL N
+                    else {
+                        ext_seq = ext_seq >> (4 * (contig_offset % 8));
+                        for (int j = 0; j < contig_offset % 8; j++)
+                            ext_seq = (ext_seq << 4) + 4;
+                    }
+                }
+                // At right bound
+                if ((current_chunk + 1) * 8 < contig_offset + mi->seq[seq_num].len &&
+                    (current_chunk + 2) * 8 > contig_offset + mi->seq[seq_num].len) {
+
+                    ext_seq = ext_seq << (4 * (8 - (contig_offset + mi->seq[seq_num].len) % 8));
+                    for (int j = 0; j < 8 - (contig_offset + mi->seq[seq_num].len) % 8; j++)
+                        ext_seq = (ext_seq >> 4) | 1073741824; // FIRST N
+                }
+            }
+
+            for (int j = 0; j < 8; j++) {
+                uint32_t ext_nuc = ext_seq % 16;
+                switch (ext_nuc) {
+                    case 0:  original_ref_seq_ext[i * 8 + j] = 'A'; break;
+                    case 1:  original_ref_seq_ext[i * 8 + j] = 'C'; break;
+                    case 2:  original_ref_seq_ext[i * 8 + j] = 'G'; break;
+                    case 3:  original_ref_seq_ext[i * 8 + j] = 'T'; break;
+                    default: original_ref_seq_ext[i * 8 + j] = 'N'; break;
+                }
+                ext_seq = ext_seq / 16;
+            }
+        }
+
+        //Create new window
+        int len_case1 = (SEQ_CHUNK_NUMBER + EXT_CHUNK_COUNT) * 8 - ref_len + 2;
+        int len_case2 = EXTRA_GAP + SIDE_SIZE + EXT_CHUNK_COUNT * 8 + IN_CHUNK_POSITION + 2;
+        char * new_ref_seq = (char*)malloc(sizeof(char) * ((len_case1 > len_case2) ? len_case1 : len_case2));
+
+        memcpy(new_ref_seq, original_ref_seq, EXTRA_GAP + SIDE_SIZE + IN_CHUNK_POSITION);
+        new_ref_seq[EXTRA_GAP + SIDE_SIZE + IN_CHUNK_POSITION] = ALT[0];
+        new_ref_seq[EXTRA_GAP + SIDE_SIZE + IN_CHUNK_POSITION + 1] = '\0';
+
+        if (EXTRA_GAP + SIDE_SIZE + IN_CHUNK_POSITION + ref_len < strlen(original_ref_seq) - 1) {
+            new_ref_seq = strcat(new_ref_seq, &original_ref_seq[EXTRA_GAP + SIDE_SIZE + IN_CHUNK_POSITION + ref_len]);
+        }
+        new_ref_seq = strcat(new_ref_seq, original_ref_seq_ext);
+
+        //Finds minimizer in window
+        mm128_v minimizer_array = {0, 0, 0};
+        mm_sketch(0, &new_ref_seq[IN_CHUNK_POSITION], SIDE_SIZE * 2 + 1,
+                  mi->w, mi->k, 0, mi->flag & MM_I_HPC, &minimizer_array);
+
+        free(original_ref_seq_ext);
+        free(new_ref_seq);
+
+        for (int i = 0; i < minimizer_array.n; i++) {
+            if (minimizer_array.a[i].y < SIDE_SIZE * 2 + 2) continue;
+            if (minimizer_array.a[i].y > (SIDE_SIZE + mi->k) * 2 - 1) continue;
+            minimizer_array.a[i].y = ((uint64_t)seq_num << 32) + (minimizer_array.a[i].y % 2) +
+                                      (position - SIDE_SIZE - 1 + minimizer_array.a[i].y / 2) * 2 +
+                                      (ref_len - 1) * 2;
+
+            kv_push(mm128_t, 0, *p, minimizer_array.a[i]);
+        }
+    }
+}
+
+//Array format:
+//REF_arr char array - REF (for control)
+//ALT_arr char array - ALT
+//POS_all ulong array - positions
+//CHR - chromosome
+//N_SNP - length
+void add_variants(mm_idx_t * mi, const char * CHR, char ** REF_arr, char ** ALT_arr, unsigned long * POS_all, int N_SNP, unsigned long curr_pos, mm128_v *p)
+{
+    if (N_SNP == 0)
+        return;
+    const char *snp_contig_name = CHR;
+    const unsigned long snp_position = curr_pos;
+
+    //Find seq
+    uint64_t contig_offset;
+    int seq_num = -1;
+    for (int i = 0; i < mi->n_seq; i++) {
+        if (strcmp(snp_contig_name, mi->seq[i].name) == 0) {
+            contig_offset = mi->seq[i].offset;
+            seq_num = i;
+            break;
+        }
+    }
+    //Error if no contigs in fasta
+    if(seq_num == -1) {
+        printf("ERROR Contig %s id not found in reference\n", snp_contig_name);
+        return;
+    }
+
+    int IN_CHUNK_POSITION = (contig_offset + snp_position - 1) % 8;
+    int SIDE_SIZE = (mi->k - 1) + mi->w;
+    // Calculate number of chunks:
+    // side chunks: take k-mer size, subtract 1 and add window size
+    // divided by chunk size and multiplied by 2 as it has 2 sides, and one for center
+    int SEQ_CHUNK_NUMBER = SIDE_SIZE / 8 * 2 + 1;
+    // add extra two side chunks if (mi->k - 1 + 10) is not a multiple of 8
+    int EXTRA_GAP = (8 - SIDE_SIZE % 8) % 8;
+    SEQ_CHUNK_NUMBER = (EXTRA_GAP) ? SEQ_CHUNK_NUMBER + 2 : SEQ_CHUNK_NUMBER;
+    uint32_t seq[SEQ_CHUNK_NUMBER];
+
+    for (int i = 0; i < SEQ_CHUNK_NUMBER; i++) {
+        uint32_t current_chunk = (contig_offset + snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i; // "-"
+
+        // Out of bounds
+        if ((contig_offset == 0 && (snp_position - 1) / 8 - (SEQ_CHUNK_NUMBER / 2) + i < 0) ||
+            current_chunk * 8 >= contig_offset + mi->seq[seq_num].len || (current_chunk + 1) * 8 <= contig_offset)
+
+            seq[i] = 1145324612; // ALL N
+        else {
+            seq[i] = mi->S[current_chunk];
+            // At left bound
+            if (current_chunk * 8 < contig_offset && (current_chunk + 1) * 8 > contig_offset) {
+                if (contig_offset % 8 == 0)
+                    seq[i] = 1145324612; // ALL N
+                else {
+                    seq[i] = seq[i] >> (4 * (contig_offset % 8));
+                    for (int j = 0; j < contig_offset % 8; j++)
+                        seq[i] = (seq[i] << 4) + 4;
+                }
+            }
+            // At right bound
+            if (current_chunk * 8 < contig_offset + mi->seq[seq_num].len &&
+                (current_chunk + 1) * 8 > contig_offset + mi->seq[seq_num].len) {
+
+                seq[i] = seq[i] << (4 * (8 - (contig_offset + mi->seq[seq_num].len) % 8));
+                for (int j = 0; j < 8 - (contig_offset + mi->seq[seq_num].len) % 8; j++)
+                    seq[i] = (seq[i] >> 4) | 1073741824; // FIRST N
+            }
+        }
+    }
+
+    char original_ref_seq[SEQ_CHUNK_NUMBER * 8 + 1];
+    original_ref_seq[SEQ_CHUNK_NUMBER * 8] = '\0';
+    for (int i = 0; i < SEQ_CHUNK_NUMBER; i++) {
+        uint32_t nuc_seq = seq[i];
+        for (int j = 0; j < 8; j++) {
+            uint32_t nuc = nuc_seq % 16;
+            switch (nuc) {
+                case 0:  original_ref_seq[i * 8 + j] = 'A'; break;
+                case 1:  original_ref_seq[i * 8 + j] = 'C'; break;
+                case 2:  original_ref_seq[i * 8 + j] = 'G'; break;
+                case 3:  original_ref_seq[i * 8 + j] = 'T'; break;
+                default: original_ref_seq[i * 8 + j] = 'N'; break;
+            }
+            nuc_seq = nuc_seq / 16;
+        }
+    }
+
+    char new_ref_seq[SEQ_CHUNK_NUMBER * 8 + 1];
+    memcpy(new_ref_seq, original_ref_seq, SEQ_CHUNK_NUMBER * 8 + 1);
+
+    int has_indel = -1;
+    int indel_count = 0;
+    for (int i = N_SNP - 1; i >= 0; i--) {
+        //add single SNP
+        if ((strlen(REF_arr[i]) == 1) && (strlen(ALT_arr[i]) == 1)) {
+            new_ref_seq[EXTRA_GAP + SIDE_SIZE + IN_CHUNK_POSITION +
+                        (POS_all[i] - snp_position)] = ALT_arr[i][0];// - 'A' + 'a';
+        } else {
+            has_indel = i;
+            indel_count++;
+        }
+    }
+    if ((indel_count == 1) && (POS_all[has_indel] == curr_pos)) {
+        if (strlen(ALT_arr[has_indel]) > mi->k) {
+            return;
+        }
+        if ((strlen(REF_arr[has_indel]) > 1) && (strlen(ALT_arr[has_indel]) == 1)) {
+            add_indel(mi, CHR, REF_arr[has_indel], ALT_arr[has_indel], curr_pos,  POS_all[has_indel], p, new_ref_seq);
+	    return;
+        }
+        if ((strlen(REF_arr[has_indel]) == 1) && (strlen(ALT_arr[has_indel]) > 1)) {
+            add_indel(mi, CHR, REF_arr[has_indel], ALT_arr[has_indel], curr_pos,  POS_all[has_indel], p, new_ref_seq);
+	    return;
+        }
+    }
+    if (indel_count == N_SNP) {
+        return;
+    }
+    //Finds minimizer in window
+    mm128_v minimizer_array = {0, 0, 0};
+    mm_sketch(0, &new_ref_seq[EXTRA_GAP + IN_CHUNK_POSITION], SIDE_SIZE * 2 + 1,
+              mi->w, mi->k, 0, mi->flag & MM_I_HPC, &minimizer_array);
+
+    for (int i = 0; i < minimizer_array.n; i++) {
+        if (minimizer_array.a[i].y < SIDE_SIZE * 2) continue;
+        if (minimizer_array.a[i].y > (SIDE_SIZE + mi->k) * 2 - 1) continue;
+        minimizer_array.a[i].y = ((uint64_t)seq_num << 32) + (minimizer_array.a[i].y % 2) +
+                                  (snp_position - SIDE_SIZE - 1 + minimizer_array.a[i].y / 2) * 2;
+
+        kv_push(mm128_t, 0, *p, minimizer_array.a[i]);
+    }
 }

@@ -52,6 +52,7 @@
 #define MM_I_HPC          0x1
 #define MM_I_NO_SEQ       0x2
 #define MM_I_NO_NAME      0x4
+#define MM_PARSE_HT       0x8
 
 #define MM_IDX_MAGIC   "MMI\2"
 
@@ -267,7 +268,7 @@ mm_idx_reader_t *mm_idx_reader_open(const char *fn, const mm_idxopt_t *opt, cons
  *
  * @return an index on success; NULL if reaching the end of the input file
  */
-mm_idx_t *mm_idx_reader_read(mm_idx_reader_t *r, int n_threads);
+mm_idx_t *mm_idx_reader_read(mm_idx_reader_t *r, int n_threads, char * vcf_with_variants);
 
 /**
  * Destroy/deallocate an index reader
@@ -426,7 +427,7 @@ int64_t mm_idx_spsc_get(const mm_idx_t *db, int32_t cid, int64_t st0, int64_t en
 
 // deprecated APIs for backward compatibility
 void mm_mapopt_init(mm_mapopt_t *opt);
-mm_idx_t *mm_idx_build(const char *fn, int w, int k, int flag, int n_threads);
+mm_idx_t *mm_idx_build(const char *fn, int w, int k, int flag, int n_threads, char * vcf_with_variants);
 
 #ifdef __cplusplus
 }
