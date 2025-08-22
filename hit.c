@@ -466,11 +466,6 @@ int genome_and_contig_exist(char **arr) {
 
 void mm_set_mapq2(void *km, int n_regs, mm_reg1_t *regs, int min_chain_sc, int match_sc, int rep_len, int is_sr, int is_splice,char **chromosome_names)
 {
-	// int has_matching_chr = 0;
-    // if (chromosome_names != NULL) {
-    //     has_matching_chr = genome_and_contig_exist(chromosome_names);
-    // }
-
 	static const float q_coef = 40.0f;
 	int64_t sum_sc = 0;
 	float uniq_ratio;
@@ -485,8 +480,6 @@ void mm_set_mapq2(void *km, int n_regs, mm_reg1_t *regs, int min_chain_sc, int m
 	uniq_ratio = (float)sum_sc / (sum_sc + rep_len);
 	for (i = 0; i < n_regs; ++i) {
 		mm_reg1_t *r = &regs[i];
-		//fprintf(stderr, "id = %d\trid = %d\tqs = %d\tqe = %d\nrs = %d\tre = %d\ndp_max0 = %d\tdp_max = %d\tdp_max2 = %d\n\n", 
-        //        r->id, r->rid, r->qs, r->qe, r->rs, r->re, r->p->dp_max0, r->p->dp_max, r->p->dp_max2);
 		if (r->inv) {
 			r->mapq = 0;
 		} else if (r->parent == r->id) {
@@ -502,7 +495,6 @@ void mm_set_mapq2(void *km, int n_regs, mm_reg1_t *regs, int min_chain_sc, int m
 				else
 					x = (float)r->p->dp_max2 * subsc / r->p->dp_max / r->score0;
 				mapq = (int)(identity * pen_cm * q_coef * (1.0f - x * x) * logf((float)r->p->dp_max / match_sc));
-				//fprintf(stderr, "identity = %f\tpen_cm = %f\tx = %f\tr->p->dp_max = %d\nmatch_sc = %d\tmapq = %d\tn_sub = %d\n\n", 
                	//	identity, pen_cm, x, r->p->dp_max, match_sc, mapq, r->n_sub);
 				if (!is_sr) {
 					int mapq_alt = (int)(6.02f * identity * identity * (r->p->dp_max - r->p->dp_max2) / match_sc + .499f); // BWA-MEM like mapQ, mostly for short reads
@@ -520,13 +512,9 @@ void mm_set_mapq2(void *km, int n_regs, mm_reg1_t *regs, int min_chain_sc, int m
 				}
 			}
 			mapq -= (int)(4.343f * logf(r->n_sub + 1) + .499f);
-			//fprintf(stderr, "final mapq = %d\n", mapq);
 			mapq = mapq > 0? mapq : 0;
 			r->mapq = mapq < 60? mapq : 60;
 			if (r->p && r->p->dp_max > r->p->dp_max2 && r->mapq == 0) r->mapq = 1;
-			// if (has_matching_chr) {
-			// 	r->mapq = 60;
-			// }
 		} else r->mapq = 0;
 
 	}
