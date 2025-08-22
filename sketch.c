@@ -224,7 +224,7 @@ void read_vcf(mm_idx_t *mi, char *fname, mm128_v *p, char *contig_name) {
     // Create an iterator for the specified contig
     hts_itr_t *itr = tbx_itr_querys(idx, contig_name);
     if (!itr) {
-        fprintf(stderr, "WARNING: No records found for contig %s in VCF file %s\n", contig_name, fname);
+        //fprintf(stderr, "WARNING: No records found for contig %s in VCF file %s\n", contig_name, fname);
         tbx_destroy(idx);
         bcf_hdr_destroy(hdr);
         hts_close(fp);

@@ -170,8 +170,8 @@ void calculate_haplotypes(mm_idx_t * mi, bcf_hdr_t *hdr, struct node *window_sta
         unsigned long POS_all[MAX_SNP];
         while (local_w_start_pointer != local_c_pointer) {
             if(gt_array[i * arr_j + local_snp_num] == '1') {
-		//printf("max_snp: %d\n", N_SNP);
-		//printf("poninter->ref %s\n", local_w_start_pointer->REF);
+        		//printf("max_snp: %d\n", N_SNP);
+        		//printf("poninter->ref %s\n", local_w_start_pointer->REF);
                 REF_arr[N_SNP] = local_w_start_pointer->REF;
                 ALT_arr[N_SNP] = local_w_start_pointer->ALT;
                 POS_all[N_SNP] = (unsigned long)(local_w_start_pointer->pos + 1);

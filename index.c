@@ -1,3 +1,4 @@
+#include "kalloc.h"
 #include <stdlib.h>
 #include <assert.h>
 #if defined(WIN32) || defined(_WIN32)
@@ -428,7 +429,7 @@ static void *worker_pipeline(void *shared, int step, void *in)
     } else if (step == 2) { // dispatch sketch to buckets
         step_t *s = (step_t*)in;
 		mm_idx_add(p->mi, s->a.n, s->a.a);
-		kfree(0, s->a.a); free(s);
+	    kfree(0, s->a.a); free(s);
 	}
     return 0;
 }
