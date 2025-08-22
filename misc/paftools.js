@@ -1,6 +1,6 @@
 #!/usr/bin/env k8
 
-var paftools_version = '2.28-r1209';
+var paftools_version = '2.30-r1287';
 
 /*****************************
  ***** Library functions *****
@@ -2494,6 +2494,10 @@ function paf_junceval(args)
 		} else { // SAM
 			ctg_name = t[2], pos = parseInt(t[3]) - 1, cigar = t[5];
 			var flag = parseInt(t[1]);
+			if (flag & 1) {
+				if (flag & 0x40) qname += '/1';
+				else if (flag & 0x80) qname += '/2';
+			}
 			if (flag&0x100) continue; // secondary
 		}
 
@@ -2609,7 +2613,8 @@ function paf_junceval(args)
 function paf_exoneval(args) // adapted from paf_junceval()
 {
 	var c, l_fuzzy = 0, print_ovlp = false, print_err_only = false, first_only = false, chr_only = false, aa = false, is_bed = false, use_cds = false, eval_base = false;
-	while ((c = getopt(args, "l:epcab1ds")) != null) {
+	var skip_start = false, skip_last = false;
+	while ((c = getopt(args, "l:epcab1dsft")) != null) {
 		if (c == 'l') l_fuzzy = parseInt(getopt.arg);
 		else if (c == 'e') print_err_only = print_ovlp = true;
 		else if (c == 'p') print_ovlp = true;
@@ -2619,6 +2624,8 @@ function paf_exoneval(args) // adapted from paf_junceval()
 		else if (c == '1') first_only = true;
 		else if (c == 'd') use_cds = true;
 		else if (c == 's') eval_base = true;
+		else if (c == 'f') skip_start = true;
+		else if (c == 't') skip_last = skip_start = true;
 	}
 
 	if (args.length - getopt.ind < 1) {
@@ -2631,6 +2638,8 @@ function paf_exoneval(args) // adapted from paf_junceval()
 		print("  -e        print erroreous overlapping exons");
 		print("  -c        only consider alignments to /^(chr)?([0-9]+|X|Y)$/");
 		print("  -1        only process the first alignment of each query");
+		print("  -f        skip the first exon in the miniprot mode");
+		print("  -t        skip the first and the last exons");
 		print("  -b        BED as input");
 		print("  -s        compute base Sn and Sp (more memory)");
 		exit(1);
@@ -2760,6 +2769,8 @@ function paf_exoneval(args) // adapted from paf_junceval()
 				for (var i = tmp_exon.length - 1; i >= 0; --i)
 					exon.push([pos + (glen - tmp_exon[i][1]), pos + (glen - tmp_exon[i][0])]);
 			}
+			if (skip_start) exon.shift();
+			if (skip_last) exon.pop();
 		} else {
 			var tmp_st = pos;
 			while ((m = re_cigar.exec(cigar)) != null) {

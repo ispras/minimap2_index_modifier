@@ -1,3 +1,57 @@
+Release 2.30-r1287 (15 June 2025)
+---------------------------------
+
+Notable changes:
+
+ * Improvement: consolidated `--spsc`.
+
+ * Deprecation: subcommands `splice2bed`, `gff2bed`, `gff2junc`, `junceval` and
+   `exoneval` in `paftools.js` are deprecated by minigff. They will remain
+   indefinitely for backward compatibility.
+
+(2.30: 15 June 2025, r1287)
+
+
+
+Release 2.29-r1283 (18 April 2025)
+----------------------------------
+
+Notable changes to minimap2:
+
+ * New feature: added the `splice:sr` preset for short RNA-seq read alignment.
+   Users may use `-j` to specify known gene annotation to improve spliced
+   alignment close to the ends of short reads. Also added `--write-junc` and
+   `--pass1` for 2-pass short-read RNA-seq alignment.
+
+ * Experimental feature: read splice scores from a file specified by `--spsc`
+   and consider the scores during base alignment. The feature makes it possible
+   to apply advanced splice models and to improve spliced alignment.
+
+ * Change: adjusted the mapping quality calculation for spliced alignment.
+
+ * Bugfixes: a) missing overlap alignment when base alignment is requested
+   (#969); b) incorrect summary information for long genomes (#1192); c)
+   missing parameter check for `--score-N` (#1226).
+
+ * Improvement: a) warn about absent junction files (#1229); b) report an error
+   if a wrong preset prefixed with "splice" is specified (#589).
+
+Notable changes to mappy:
+
+ * Improvement: allow passing read name (#1260)
+
+ * Improvement: exposed score for ambiguous bases (#1240)
+
+Minimap2 now supports short/long genomic/RNA-seq read alignment along with
+contig alignment and all-vs-all read overlapping. It produces identical genomic
+long-read or contig alignment to v2.27. Short genomic read alignment and the
+mapping quality of long RNA-seq read alignment may slightly differ in very rare
+cases.
+
+(2.29: 18 April 2025, r1283)
+
+
+
 Release 2.28-r1209 (27 March 2024)
 ----------------------------------
 
