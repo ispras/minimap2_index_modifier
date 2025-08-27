@@ -241,7 +241,9 @@ char **collect_seed_chromosome_names(const mm_idx_t *mi, int n_a, mm_reg1_t *reg
         best_token_len = strcspn(best_alignment, "_");
     }
 
-    for (int i = 0; i < n_a; ++i) {
+    int chr_marked = 0;
+
+    for (int i = 1; i < n_a; ++i) {
         const char *curr_name = mi->seq[regs[i].rid].name;
         if (!curr_name) curr_name = "";
 
@@ -253,16 +255,17 @@ char **collect_seed_chromosome_names(const mm_idx_t *mi, int n_a, mm_reg1_t *reg
         }
 
         /* Rule 2: if best contains "contig" and first tokens match -> delete */
-        if (!mark_delete && best_has_contig) {
+        if (!chr_marked && !mark_delete && best_has_contig) {
             size_t curr_token_len = strcspn(curr_name, "_");
             if (curr_token_len == best_token_len &&
                 strncmp(curr_name, best_alignment, best_token_len) == 0) {
                 mark_delete = 1;
+				chr_marked = 1;
             }
         }
 
         /* Allocate and copy name, optionally appending " delete" */
-        static const char *DELETE_SUFFIX = " delete";
+        static const char *DELETE_SUFFIX = "_delete";
         size_t base_len = strlen(curr_name);
         size_t add_len  = mark_delete ? strlen(DELETE_SUFFIX) : 0;
         char *out = (char*)malloc(base_len + add_len + 1);
@@ -450,7 +453,7 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 		char* delete_name = "delete";
 		for (z = n_regs0 - 1; z > 0; z--) {
 			r = regs0[z];
-			if (chrs_to_drop != NULL && chrs_to_drop[z] != NULL && strcmp(chrs_to_drop[z], delete_name) == 0) {
+			if (chrs_to_drop != NULL && chrs_to_drop[z] != NULL && strstr(chrs_to_drop[z], delete_name) != NULL) {
 				regs0 = remove_second_suboptimal_alignment(regs0, &n_regs0, z);
 
 				regs0[0].n_sub = n_regs0 - 1;
@@ -494,8 +497,7 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 		    char* delete_name = "delete";
 			for (z = n_regs0 - 1; z > 0; z--) {
 				r = regs0[z];
-				fprintf(stderr,"%d\n", z);
-				if (chrs_to_drop != NULL && chrs_to_drop[z] != NULL && strcmp(chrs_to_drop[z], delete_name) == 0) {
+				if (chrs_to_drop != NULL && chrs_to_drop[z] != NULL && strstr(chrs_to_drop[z], delete_name) != NULL) {
 					regs0 = remove_second_suboptimal_alignment(regs0, &n_regs0, z);
 
 					regs0[0].n_sub = n_regs0 - 1;
