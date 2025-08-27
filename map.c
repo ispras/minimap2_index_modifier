@@ -225,57 +225,52 @@ static mm_reg1_t *align_regs(const mm_mapopt_t *opt, const mm_idx_t *mi, void *k
 }
 
 // collecting unique chromosome names found for the current read
-char **collect_seed_chromosome_names(const mm_idx_t *mi, int n_a, mm_reg1_t *regs)
+char **collect_seed_chromosome_names(const mm_idx_t *mi, int n_regs, const mm_reg1_t *regs)
 {
-	int max_chromosomes = 32;
+    if (!mi || !regs || n_regs <= 0) return NULL;
+    if (mi->n_seq <= 0) return NULL;
 
-	char **chromosome_names = CALLOC(char*, max_chromosomes);
-	const char* best_alignment;
-	char* best_copy;
-	const char* delete_name = "delete";
-	int i;
-	for (i = 0; i < max_chromosomes; ++i) {
-		chromosome_names[i] = NULL;
-	}
-	if (regs != NULL) {
-		for (i = 1; i < n_a; ++i) {
-			const char *curr_name;
-			char *curr_copy;
-			char *output;
-			char *best;
+    /* First pass: count how many entries have a valid rid and non-null name. */
+    size_t count = 0;
+    for (int i = 0; i < n_regs; ++i) {
+        int rid = regs[i].rid;
+        if ((unsigned)rid >= (unsigned)mi->n_seq) continue;
+        if (mi->seq[rid].name) ++count;
+    }
+    if (count == 0) return NULL;
 
-			best_alignment = mi->seq[regs[0].rid].name;
-			best_copy = strdup(best_alignment);
-			curr_name = mi->seq[regs[i].rid].name;
-			curr_copy = strdup(curr_name);
+    /* Allocate exactly once (+1 for NULL terminator). */
+    char **names = (char**)malloc((count + 1) * sizeof(char*));
+    if (!names) return NULL;
 
-			if (strstr(curr_name, "contig") != NULL) {
-				chromosome_names[i] = strdup(delete_name);
-			}
-			if (strstr(best_alignment, "contig") != NULL) {
-				best = strtok(best_copy, "_");
-				output = strtok(curr_copy, "_");
-				if (best != NULL && output != NULL && strcmp(best, output) == 0) {
-					chromosome_names[i] = strdup(delete_name);
-				}
-			}
-
-			free(curr_copy);
-			free(best_copy);
-		}
-	}
-
-	return chromosome_names;
-}
-
-void free_chromosome_names(char **chromosome_names, int max_chromosomes) {
-	int i;
-    for (i = 0; i < max_chromosomes; i++) {
-        if (chromosome_names[i] != NULL) {
-            free(chromosome_names[i]);
+    /* Second pass: copy names in order (duplicates preserved). */
+    size_t n = 0;
+    for (int i = 0; i < n_regs; ++i) {
+        int rid = regs[i].rid;
+        if ((unsigned)rid >= (unsigned)mi->n_seq) continue;
+        const char *curr = mi->seq[rid].name;
+        if (curr) {
+            names[n] = strdup(curr);
+            if (!names[n]) {
+                /* OOM cleanup */
+                while (n > 0) free(names[--n]);
+                free(names);
+                return NULL;
+            }
+            ++n;
         }
     }
-    free(chromosome_names);
+
+    names[n] = NULL;
+    return names;
+}
+
+
+void free_chromosome_names(char **names)
+{
+    if (!names) return;
+    for (char **p = names; *p; ++p) free(*p);
+    free(names);
 }
 
 typedef struct {
@@ -286,65 +281,6 @@ typedef struct {
     int32_t start_pos;    // start position of the first hit
     int32_t end_pos;      // end position of the last hit
 } chromosome_info_t;
-
-// collecting unique chromosome info found for the current read
-chromosome_info_t *collect_seed_chromosome_info(const mm_idx_t *mi, int n_a, mm128_t *a, int *n_chromosomes) 
-{
-    int max_chroms = 32;
-    *n_chromosomes = 0;
-    chromosome_info_t *chr_info = (chromosome_info_t*)calloc(max_chroms, sizeof(chromosome_info_t));
-	int i;
-
-    for (i = 0; i < n_a; ++i) {
-        uint32_t rid = a[i].x<<1>>33;
-        int exists = 0;
-        int32_t pos = (int32_t)a[i].x;
-		int j;
-
-        for (j = 0; j < *n_chromosomes; ++j) {
-            if (rid == chr_info[j].rid) {
-                exists = 1;
-                chr_info[j].n_hits++;
-                
-                if (pos < chr_info[j].start_pos) chr_info[j].start_pos = pos;
-                if (pos > chr_info[j].end_pos) chr_info[j].end_pos = pos;
-                
-                break;
-            }
-        }
-
-        if (!exists) {
-            if (*n_chromosomes == max_chroms) {
-                max_chroms *= 2;
-                chr_info = (chromosome_info_t*)realloc(chr_info, max_chroms * sizeof(chromosome_info_t));
-            }
-
-            int idx = *n_chromosomes;
-            chr_info[idx].name = strdup(mi->seq[rid].name);
-            chr_info[idx].len = mi->seq[rid].len;
-            chr_info[idx].rid = rid;
-            chr_info[idx].n_hits = 1;
-            chr_info[idx].start_pos = pos;
-            chr_info[idx].end_pos = pos;
-            (*n_chromosomes)++;
-        }
-    }
-
-    if (*n_chromosomes < max_chroms) {
-        chr_info = (chromosome_info_t*)realloc(chr_info, *n_chromosomes * sizeof(chromosome_info_t));
-    }
-
-    return chr_info;
-}
-
-// free chromosome_info
-void free_chromosome_info(chromosome_info_t *chr_info, int n_chromosomes) {
-	int i;
-    for (i = 0; i < n_chromosomes; i++) {
-        free(chr_info[i].name);
-    }
-    free(chr_info);
-}
 
 // delete second alignment (to improve mapq)
 mm_reg1_t* remove_second_suboptimal_alignment(mm_reg1_t *regs, int *num_regs, int z) {
@@ -494,7 +430,7 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 		char* delete_name = "delete";
 		for (z = n_regs0 - 1; z > 0; z--) {
 			r = regs0[z];
-			if (chrs_to_drop[z] != NULL && strcmp(chrs_to_drop[z], delete_name) == 0) {
+			if (chrs_to_drop != NULL && chrs_to_drop[z] != NULL && strcmp(chrs_to_drop[z], delete_name) == 0) {
 				regs0 = remove_second_suboptimal_alignment(regs0, &n_regs0, z);
 
 				regs0[0].n_sub = n_regs0 - 1;
@@ -524,22 +460,38 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 	} else { // multi-segment
 		mm_seg_t *seg;
 		seg = mm_seg_gen(b->km, hash, n_segs, qlens, n_regs0, regs0, n_regs, regs, a); // split fragment chain to separate segment chains
-		free(regs0);
 		for (i = 0; i < n_segs; ++i) {
 			mm_set_parent(b->km, opt->mask_level, opt->mask_len, n_regs[i], regs[i], opt->a * 2 + opt->b, opt->flag&MM_F_HARD_MLEVEL, opt->alt_drop); // update mm_reg1_t::parent
 			regs[i] = align_regs(opt, mi, b->km, qlens[i], seqs[i], &n_regs[i], regs[i], seg[i].a);
 			chrs_to_drop = collect_seed_chromosome_names(mi, n_regs0, regs0);
-			regs[i] = remove_second_suboptimal_alignment(regs[i], &n_regs[i], i);
+
+
+			mm_reg1_t r;
+			if (n_regs0 > 0)
+				r = regs0[0];
+
+			int z;
+		    char* delete_name = "delete";
+			for (z = n_regs0 - 1; z > 0; z--) {
+				r = regs0[z];
+				fprintf(stderr,"%d\n", z);
+				if (chrs_to_drop != NULL && chrs_to_drop[z] != NULL && strcmp(chrs_to_drop[z], delete_name) == 0) {
+					regs0 = remove_second_suboptimal_alignment(regs0, &n_regs0, z);
+
+					regs0[0].n_sub = n_regs0 - 1;
+				}
+			}
 
 			mm_set_mapq2(b->km, n_regs[i], regs[i], opt->min_chain_score, opt->a, rep_len, is_sr || is_sr_rna, is_splice, chrs_to_drop);
 
 		}
+		free(regs0);
 		mm_seg_free(b->km, n_segs, seg);
 		if (n_segs == 2 && opt->pe_ori >= 0 && (opt->flag&MM_F_CIGAR))
 			mm_pair(b->km, max_chain_gap_ref, opt->pe_bonus, opt->a * 2 + opt->b, opt->a, qlens, n_regs, regs); // pairing
 	}
 
-	free_chromosome_names(chrs_to_drop, 32);
+	free_chromosome_names(chrs_to_drop);
 
 	kfree(b->km, mv.a);
 	kfree(b->km, a);
@@ -716,7 +668,7 @@ static void merge_hits(step_t *s)
 				mm_select_sub(km, opt->pri_ratio, s->p->mi->k*2, opt->best_n, 0, opt->max_gap * 0.8, &s->n_reg[k], s->reg[k]);
 				mm_set_sam_pri(s->n_reg[k], s->reg[k]);
 			}
-			s->reg[k] = remove_second_suboptimal_alignment(s->reg[k], &(s->n_reg[k]), k);
+			//s->reg[k] = remove_second_suboptimal_alignment(s->reg[k], &(s->n_reg[k]), k);
 
 			mm_set_mapq2(km, s->n_reg[k], s->reg[k], opt->min_chain_score, opt->a, rep_len, !!(opt->flag & (MM_F_SR|MM_F_SR_RNA)), !!(opt->flag & MM_F_SPLICE), NULL);
 		}
