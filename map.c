@@ -225,51 +225,71 @@ static mm_reg1_t *align_regs(const mm_mapopt_t *opt, const mm_idx_t *mi, void *k
 }
 
 // collecting unique chromosome names found for the current read
-char **collect_seed_chromosome_names(const mm_idx_t *mi, int n_regs, const mm_reg1_t *regs)
+char **collect_seed_chromosome_names(const mm_idx_t *mi, int n_a, mm_reg1_t *regs)
 {
-    if (!mi || !regs || n_regs <= 0) return NULL;
-    if (mi->n_seq <= 0) return NULL;
+    if (mi == NULL || regs == NULL || n_a <= 0) return NULL;
 
-    /* First pass: count how many entries have a valid rid and non-null name. */
-    size_t count = 0;
-    for (int i = 0; i < n_regs; ++i) {
-        int rid = regs[i].rid;
-        if ((unsigned)rid >= (unsigned)mi->n_seq) continue;
-        if (mi->seq[rid].name) ++count;
+    char **chromosome_names = (char**)calloc((size_t)n_a, sizeof(char*));
+    if (!chromosome_names) return NULL;
+
+    const char *best_alignment = mi->seq[regs[0].rid].name;
+    const int best_has_contig = (best_alignment && strstr(best_alignment, "contig") != NULL);
+
+    /* Compute the first token (up to '_') length of best only once */
+    size_t best_token_len = 0;
+    if (best_has_contig && best_alignment) {
+        best_token_len = strcspn(best_alignment, "_");
     }
-    if (count == 0) return NULL;
 
-    /* Allocate exactly once (+1 for NULL terminator). */
-    char **names = (char**)malloc((count + 1) * sizeof(char*));
-    if (!names) return NULL;
+    for (int i = 0; i < n_a; ++i) {
+        const char *curr_name = mi->seq[regs[i].rid].name;
+        if (!curr_name) curr_name = "";
 
-    /* Second pass: copy names in order (duplicates preserved). */
-    size_t n = 0;
-    for (int i = 0; i < n_regs; ++i) {
-        int rid = regs[i].rid;
-        if ((unsigned)rid >= (unsigned)mi->n_seq) continue;
-        const char *curr = mi->seq[rid].name;
-        if (curr) {
-            names[n] = strdup(curr);
-            if (!names[n]) {
-                /* OOM cleanup */
-                while (n > 0) free(names[--n]);
-                free(names);
-                return NULL;
-            }
-            ++n;
+        int mark_delete = 0;
+
+        /* Rule 1: if current name contains "contig" -> delete */
+        if (strstr(curr_name, "contig") != NULL) {
+            mark_delete = 1;
         }
+
+        /* Rule 2: if best contains "contig" and first tokens match -> delete */
+        if (!mark_delete && best_has_contig) {
+            size_t curr_token_len = strcspn(curr_name, "_");
+            if (curr_token_len == best_token_len &&
+                strncmp(curr_name, best_alignment, best_token_len) == 0) {
+                mark_delete = 1;
+            }
+        }
+
+        /* Allocate and copy name, optionally appending " delete" */
+        static const char *DELETE_SUFFIX = " delete";
+        size_t base_len = strlen(curr_name);
+        size_t add_len  = mark_delete ? strlen(DELETE_SUFFIX) : 0;
+        char *out = (char*)malloc(base_len + add_len + 1);
+        if (!out) {
+            /* best-effort cleanup on allocation failure */
+            for (int j = 0; j < i; ++j) free(chromosome_names[j]);
+            free(chromosome_names);
+            return NULL;
+        }
+
+        memcpy(out, curr_name, base_len);
+        if (mark_delete) memcpy(out + base_len, DELETE_SUFFIX, add_len);
+        out[base_len + add_len] = '\0';
+
+        chromosome_names[i] = out;
     }
 
-    names[n] = NULL;
-    return names;
+    return chromosome_names;
 }
 
 
-void free_chromosome_names(char **names)
+void free_chromosome_names(char **names, int n)
 {
     if (!names) return;
-    for (char **p = names; *p; ++p) free(*p);
+    for (int i = 0; i < n; ++i) {
+        free(names[i]);
+    }
     free(names);
 }
 
@@ -491,7 +511,7 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 			mm_pair(b->km, max_chain_gap_ref, opt->pe_bonus, opt->a * 2 + opt->b, opt->a, qlens, n_regs, regs); // pairing
 	}
 
-	free_chromosome_names(chrs_to_drop);
+	free_chromosome_names(chrs_to_drop, n_regs0);
 
 	kfree(b->km, mv.a);
 	kfree(b->km, a);
