@@ -690,7 +690,7 @@ static void merge_hits(step_t *s)
 				mm_select_sub(km, opt->pri_ratio, s->p->mi->k*2, opt->best_n, 0, opt->max_gap * 0.8, &s->n_reg[k], s->reg[k]);
 				mm_set_sam_pri(s->n_reg[k], s->reg[k]);
 			}
-			//s->reg[k] = remove_second_suboptimal_alignment(s->reg[k], &(s->n_reg[k]), k);
+			s->reg[k] = remove_second_suboptimal_alignment(s->reg[k], &(s->n_reg[k]), k);
 
 			mm_set_mapq2(km, s->n_reg[k], s->reg[k], opt->min_chain_score, opt->a, rep_len, !!(opt->flag & (MM_F_SR|MM_F_SR_RNA)), !!(opt->flag & MM_F_SPLICE), NULL);
 		}
