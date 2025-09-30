@@ -529,6 +529,24 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 			}
 		}
 
+		int max_dpmax2 = 0;
+		int max_score = 0;
+		for (z = 1; z < n_regs0; z++) {
+			regs0[z].id = z;
+			if (regs0[z].p->dp_score > max_dpmax2) {
+				max_dpmax2 = regs0[z].p->dp_score;
+			}
+			if (regs0[z].score > max_score) {
+				max_score = regs0[z].score;
+			}
+		}
+
+		if (n_regs0 > 0) {
+			if (regs0[0].p != NULL)
+				regs0[0].p->dp_max2 = max_dpmax2;
+			regs0[0].subsc = max_score;
+		}
+
 		mm_set_mapq2(b->km, n_regs0, regs0, opt->min_chain_score, opt->a, rep_len, is_sr || is_sr_rna, is_splice, chrs_to_drop);
 		n_regs[0] = n_regs0, regs[0] = regs0;
 	} else { // multi-segment
@@ -546,6 +564,24 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 				if (chrs_to_drop[z] != NULL && strcmp(chrs_to_drop[z], delete_name) == 0) {
 					regs[i] = remove_second_suboptimal_alignment(regs[i], &n_regs[i], z);
 				}
+			}
+
+			int max_dpmax2 = 0;
+			int max_score = 0;
+			for (z = 1; z < n_regs[i]; z++) {
+				regs[i][z].id = z;
+				if (regs[i][z].p->dp_score > max_dpmax2) {
+					max_dpmax2 = regs[i][z].p->dp_score;
+				}
+				if (regs[i][z].score > max_score) {
+					max_score = regs[i][z].score;
+				}
+			}
+
+			if (n_regs[i] > 0) {
+				if (regs[i][0].p != NULL)
+					regs[i][0].p->dp_max2 = max_dpmax2;
+				regs[i][0].subsc = max_score;
 			}
 
 			mm_set_mapq2(b->km, n_regs[i], regs[i], opt->min_chain_score, opt->a, rep_len, is_sr || is_sr_rna, is_splice, chrs_to_drop);
@@ -815,7 +851,7 @@ static void *worker_pipeline(void *shared, int step, void *in)
 				} else if (s->n_reg[i] > 0) { // the query has at least one hit
 					for (j = 0; j < s->n_reg[i]; ++j) {
 						const mm_reg1_t *r = &s->reg[i][j];
-						assert(!r->sam_pri || r->id == r->parent);
+						//assert(!r->sam_pri || r->id == r->parent);
 						if ((p->opt->flag & MM_F_NO_PRINT_2ND) && r->id != r->parent)
 							continue;
 						if (p->opt->flag & MM_F_OUT_SAM)
