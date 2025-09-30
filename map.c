@@ -352,6 +352,9 @@ mm_reg1_t* remove_second_suboptimal_alignment(mm_reg1_t *regs, int *num_regs, in
         return regs;
     }
 
+	regs[z - 1].p->dp_max2 = regs[z].p->dp_max2;
+	regs[z - 1].subsc = regs[z].subsc;
+
 	if (regs[z].p) {
         free(regs[z].p);
     }
@@ -486,37 +489,13 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 
 		chrs_to_drop = collect_seed_chromosome_names(mi, n_regs0, regs0);
 
-		mm_reg1_t r;
-		if (n_regs0 > 0)
-			r = regs0[0];
-
 		int z;
 		char* delete_name = "delete";
 		for (z = n_regs0 - 1; z > 0; z--) {
-			r = regs0[z];
 			if (chrs_to_drop[z] != NULL && strcmp(chrs_to_drop[z], delete_name) == 0) {
 				regs0 = remove_second_suboptimal_alignment(regs0, &n_regs0, z);
-
 				regs0[0].n_sub = n_regs0 - 1;
 			}
-		}
-
-		int max_dpmax2 = 0;
-		int max_score = 0;
-		for (z = 1; z < n_regs0; z++) {
-			regs0[z].id = z;
-			if (regs0[z].p->dp_score > max_dpmax2) {
-				max_dpmax2 = regs0[z].p->dp_score;
-			}
-			if (regs0[z].score > max_score) {
-				max_score = regs0[z].score;
-			}
-		}
-
-		if (n_regs0 > 0) {
-			if (regs0[0].p != NULL)
-				regs0[0].p->dp_max2 = max_dpmax2;
-			regs0[0].subsc = max_score;
 		}
 
 		mm_set_mapq2(b->km, n_regs0, regs0, opt->min_chain_score, opt->a, rep_len, is_sr || is_sr_rna, is_splice, chrs_to_drop);
@@ -524,16 +503,24 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 	} else { // multi-segment
 		mm_seg_t *seg;
 		seg = mm_seg_gen(b->km, hash, n_segs, qlens, n_regs0, regs0, n_regs, regs, a); // split fragment chain to separate segment chains
-		free(regs0);
 		for (i = 0; i < n_segs; ++i) {
 			mm_set_parent(b->km, opt->mask_level, opt->mask_len, n_regs[i], regs[i], opt->a * 2 + opt->b, opt->flag&MM_F_HARD_MLEVEL, opt->alt_drop); // update mm_reg1_t::parent
 			regs[i] = align_regs(opt, mi, b->km, qlens[i], seqs[i], &n_regs[i], regs[i], seg[i].a);
-			chrs_to_drop = collect_seed_chromosome_names(mi, n_regs0, regs0);
-			regs[i] = remove_second_suboptimal_alignment(regs[i], &n_regs[i], i);
+			
+			chrs_to_drop = collect_seed_chromosome_names(mi, n_regs[i], regs[i]);
+			
+			int z;
+			char* delete_name = "delete";
+			for (z = n_regs[i] - 1; z > 0; z--) {
+				if (chrs_to_drop[z] != NULL && strcmp(chrs_to_drop[z], delete_name) == 0) {
+					regs[i] = remove_second_suboptimal_alignment(regs[i], &n_regs[i], z);
+				}
+			}
 
 			mm_set_mapq2(b->km, n_regs[i], regs[i], opt->min_chain_score, opt->a, rep_len, is_sr || is_sr_rna, is_splice, chrs_to_drop);
 
 		}
+		free(regs0);
 		mm_seg_free(b->km, n_segs, seg);
 		if (n_segs == 2 && opt->pe_ori >= 0 && (opt->flag&MM_F_CIGAR))
 			mm_pair(b->km, max_chain_gap_ref, opt->pe_bonus, opt->a * 2 + opt->b, opt->a, qlens, n_regs, regs); // pairing
@@ -716,7 +703,7 @@ static void merge_hits(step_t *s)
 				mm_select_sub(km, opt->pri_ratio, s->p->mi->k*2, opt->best_n, 0, opt->max_gap * 0.8, &s->n_reg[k], s->reg[k]);
 				mm_set_sam_pri(s->n_reg[k], s->reg[k]);
 			}
-			s->reg[k] = remove_second_suboptimal_alignment(s->reg[k], &(s->n_reg[k]), k);
+			//s->reg[k] = remove_second_suboptimal_alignment(s->reg[k], &(s->n_reg[k]), k);
 
 			mm_set_mapq2(km, s->n_reg[k], s->reg[k], opt->min_chain_score, opt->a, rep_len, !!(opt->flag & (MM_F_SR|MM_F_SR_RNA)), !!(opt->flag & MM_F_SPLICE), NULL);
 		}
