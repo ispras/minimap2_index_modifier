@@ -254,7 +254,7 @@ char **collect_seed_chromosome_names(const mm_idx_t *mi, int n_a, mm_reg1_t *reg
 		if (max_score_i != 0) {
 			mm_reg1_t tmp = regs[0];
 			regs[0] = regs[max_score_i];
-                        regs[max_score_i] = tmp;
+			regs[max_score_i] = tmp;
 
 			regs[max_score_i].id = regs[0].id;
 			regs[0].id = tmp.id;
@@ -265,7 +265,7 @@ char **collect_seed_chromosome_names(const mm_idx_t *mi, int n_a, mm_reg1_t *reg
 			regs[max_score_i].n_sub = regs[0].n_sub;
 			regs[0].n_sub = tmp.n_sub;
 
-                        regs[0].parent = 0;
+			regs[0].parent = 0;
 		}
 
 
@@ -274,7 +274,7 @@ char **collect_seed_chromosome_names(const mm_idx_t *mi, int n_a, mm_reg1_t *reg
 			char *curr_copy;
 			char *output;
 			char *best;
-                        regs[i].parent = 0;
+			regs[i].parent = 0;
 			best_alignment = mi->seq[regs[0].rid].name;
 			best_copy = strdup(best_alignment);
 			curr_name = mi->seq[regs[i].rid].name;
@@ -301,94 +301,91 @@ char **collect_seed_chromosome_names(const mm_idx_t *mi, int n_a, mm_reg1_t *reg
 
 void free_chromosome_names(char **chromosome_names, int max_chromosomes) {
 	int i;
-    for (i = 0; i < max_chromosomes; i++) {
-        if (chromosome_names[i] != NULL) {
-            free(chromosome_names[i]);
-        }
-    }
-    free(chromosome_names);
+	for (i = 0; i < max_chromosomes; i++) {
+		if (chromosome_names[i] != NULL) {
+			free(chromosome_names[i]);
+		}
+	}
+	free(chromosome_names);
 }
 
 typedef struct {
-    char *name;           // chromosome name
-    uint32_t len;         // chromosome length
-    int32_t rid;          // chromosome id
-    int32_t n_hits;       // number of hits to the current chromosome
-    int32_t start_pos;    // start position of the first hit
-    int32_t end_pos;      // end position of the last hit
+	char *name;			// chromosome name
+	uint32_t len;		// chromosome length
+	int32_t rid;		// chromosome id
+	int32_t n_hits;		// number of hits to the current chromosome
+	int32_t start_pos;	// start position of the first hit
+	int32_t end_pos;	// end position of the last hit
 } chromosome_info_t;
 
 // collecting unique chromosome info found for the current read
 chromosome_info_t *collect_seed_chromosome_info(const mm_idx_t *mi, int n_a, mm128_t *a, int *n_chromosomes) 
 {
-    int max_chroms = 32;
-    *n_chromosomes = 0;
-    chromosome_info_t *chr_info = (chromosome_info_t*)calloc(max_chroms, sizeof(chromosome_info_t));
+	int max_chroms = 32;
+	*n_chromosomes = 0;
+	chromosome_info_t *chr_info = (chromosome_info_t*)calloc(max_chroms, sizeof(chromosome_info_t));
 	int i;
 
-    for (i = 0; i < n_a; ++i) {
-        uint32_t rid = a[i].x<<1>>33;
-        int exists = 0;
-        int32_t pos = (int32_t)a[i].x;
+	for (i = 0; i < n_a; ++i) {
+		uint32_t rid = a[i].x<<1>>33;
+		int exists = 0;
+		int32_t pos = (int32_t)a[i].x;
 		int j;
 
-        for (j = 0; j < *n_chromosomes; ++j) {
-            if (rid == chr_info[j].rid) {
-                exists = 1;
-                chr_info[j].n_hits++;
-                
-                if (pos < chr_info[j].start_pos) chr_info[j].start_pos = pos;
-                if (pos > chr_info[j].end_pos) chr_info[j].end_pos = pos;
-                
-                break;
-            }
-        }
+		for (j = 0; j < *n_chromosomes; ++j) {
+			if (rid == chr_info[j].rid) {
+				exists = 1;
+				chr_info[j].n_hits++;
 
-        if (!exists) {
-            if (*n_chromosomes == max_chroms) {
-                max_chroms *= 2;
-                chr_info = (chromosome_info_t*)realloc(chr_info, max_chroms * sizeof(chromosome_info_t));
-            }
+				if (pos < chr_info[j].start_pos) chr_info[j].start_pos = pos;
+				if (pos > chr_info[j].end_pos) chr_info[j].end_pos = pos;
 
-            int idx = *n_chromosomes;
-            chr_info[idx].name = strdup(mi->seq[rid].name);
-            chr_info[idx].len = mi->seq[rid].len;
-            chr_info[idx].rid = rid;
-            chr_info[idx].n_hits = 1;
-            chr_info[idx].start_pos = pos;
-            chr_info[idx].end_pos = pos;
-            (*n_chromosomes)++;
-        }
-    }
+				break;
+			}
+		}
 
-    if (*n_chromosomes < max_chroms) {
-        chr_info = (chromosome_info_t*)realloc(chr_info, *n_chromosomes * sizeof(chromosome_info_t));
-    }
+		if (!exists) {
+			if (*n_chromosomes == max_chroms) {
+				max_chroms *= 2;
+				chr_info = (chromosome_info_t*)realloc(chr_info, max_chroms * sizeof(chromosome_info_t));
+			}
 
-    return chr_info;
+			int idx = *n_chromosomes;
+			chr_info[idx].name = strdup(mi->seq[rid].name);
+			chr_info[idx].len = mi->seq[rid].len;
+			chr_info[idx].rid = rid;
+			chr_info[idx].n_hits = 1;
+			chr_info[idx].start_pos = pos;
+			chr_info[idx].end_pos = pos;
+			(*n_chromosomes)++;
+		}
+	}
+
+	if (*n_chromosomes < max_chroms) {
+		chr_info = (chromosome_info_t*)realloc(chr_info, *n_chromosomes * sizeof(chromosome_info_t));
+	}
+
+	return chr_info;
 }
 
 // free chromosome_info
 void free_chromosome_info(chromosome_info_t *chr_info, int n_chromosomes) {
 	int i;
-    for (i = 0; i < n_chromosomes; i++) {
-        free(chr_info[i].name);
-    }
-    free(chr_info);
+	for (i = 0; i < n_chromosomes; i++) {
+		free(chr_info[i].name);
+	}
+	free(chr_info);
 }
 
 // delete second alignment (to improve mapq)
 mm_reg1_t* remove_second_suboptimal_alignment(mm_reg1_t *regs, int *num_regs, int z) {
 	if (!regs || *num_regs < 2) {
-        return regs;
-    }
-
-	//regs[z - 1].p->dp_max2 = regs[z].p->dp_max2;
-	//regs[z - 1].subsc = regs[z].subsc;
+		return regs;
+	}
 
 	if (regs[z].p) {
-        free(regs[z].p);
-    }
+		free(regs[z].p);
+	}
 	int i;
 	for (i = z; i < *num_regs - 1; i++) {
 		regs[i] = regs[i + 1];
@@ -398,7 +395,7 @@ mm_reg1_t* remove_second_suboptimal_alignment(mm_reg1_t *regs, int *num_regs, in
 
 	regs = (mm_reg1_t*)realloc(regs, (*num_regs) * sizeof(*regs));
 
-    return regs;
+	return regs;
 }
 
 void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const char **seqs, int *n_regs, mm_reg1_t **regs, mm_tbuf_t *b, const mm_mapopt_t *opt, const char *qname)
@@ -518,7 +515,7 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 		regs0 = align_regs(opt, mi, b->km, qlens[0], seqs[0], &n_regs0, regs0, a);
 		regs0 = (mm_reg1_t*)realloc(regs0, sizeof(*regs0) * n_regs0);
 
-                int chrs_to_drop_count = n_regs0;
+		int chrs_to_drop_count = n_regs0;
 		chrs_to_drop = collect_seed_chromosome_names(mi, n_regs0, regs0);
 
 		int z;
@@ -549,15 +546,15 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 		}
 
 		mm_set_mapq2(b->km, n_regs0, regs0, opt->min_chain_score, opt->a, rep_len, is_sr || is_sr_rna, is_splice, chrs_to_drop);
-                free_chromosome_names(chrs_to_drop, chrs_to_drop_count);
+		free_chromosome_names(chrs_to_drop, chrs_to_drop_count);
 		n_regs[0] = n_regs0, regs[0] = regs0;
 	} else { // multi-segment
 		mm_seg_t *seg;
 		seg = mm_seg_gen(b->km, hash, n_segs, qlens, n_regs0, regs0, n_regs, regs, a); // split fragment chain to separate segment chains
-	        free (regs0);
-                for (i = 0; i < n_segs; ++i) {
+		free (regs0);
+		for (i = 0; i < n_segs; ++i) {
 			mm_set_parent(b->km, opt->mask_level, opt->mask_len, n_regs[i], regs[i], opt->a * 2 + opt->b, opt->flag&MM_F_HARD_MLEVEL, opt->alt_drop); // update mm_reg1_t::parent
-                        regs[i] = align_regs(opt, mi, b->km, qlens[i], seqs[i], &n_regs[i], regs[i], seg[i].a);
+			regs[i] = align_regs(opt, mi, b->km, qlens[i], seqs[i], &n_regs[i], regs[i], seg[i].a);
 
 			int chrs_to_drop_count = n_regs[i];
 			chrs_to_drop = collect_seed_chromosome_names(mi, n_regs[i], regs[i]);
@@ -574,8 +571,6 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 			int max_score = 0;
 			for (z = 1; z < n_regs[i]; z++) {
 				regs[i][z].id = z;
-                                if (regs[i][z].parent != 0)
-                                fprintf(stderr, "parent\t%d\n", regs[i][z].parent);
 				if (regs[i][z].p->dp_score > max_dpmax2) {
 					max_dpmax2 = regs[i][z].p->dp_score;
 				}
@@ -591,7 +586,7 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 			}
 
 			mm_set_mapq2(b->km, n_regs[i], regs[i], opt->min_chain_score, opt->a, rep_len, is_sr || is_sr_rna, is_splice, chrs_to_drop);
-                        free_chromosome_names(chrs_to_drop, chrs_to_drop_count);
+			free_chromosome_names(chrs_to_drop, chrs_to_drop_count);
 		}
 		mm_seg_free(b->km, n_segs, seg);
 		if (n_segs == 2 && opt->pe_ori >= 0 && (opt->flag&MM_F_CIGAR))
@@ -660,7 +655,7 @@ typedef struct {
 
 typedef struct {
 	const pipeline_t *p;
-    int n_seq, n_frag;
+	int n_seq, n_frag;
 	mm_bseq1_t *seq;
 	int *n_reg, *seg_off, *n_seg, *rep_len, *frag_gap;
 	mm_reg1_t **reg;
@@ -669,7 +664,7 @@ typedef struct {
 
 static void worker_for(void *_data, long i, int tid) // kt_for() callback
 {
-    step_t *s = (step_t*)_data;
+	step_t *s = (step_t*)_data;
 	int qlens[MM_MAX_SEG], j, off = s->seg_off[i], pe_ori = s->p->opt->pe_ori;
 	const char *qseqs[MM_MAX_SEG];
 	double t = 0.0;
@@ -738,7 +733,7 @@ static void merge_hits(step_t *s)
 			int j, l, t, rep_len = 0;
 			qlens[i] = s->seq[k].l_seq;
 			for (j = 0, s->n_reg[k] = 0; j < s->p->n_parts; ++j) {
-				mm_err_fread(&n_reg_part[j],    sizeof(int), 1, fp[j]);
+				mm_err_fread(&n_reg_part[j],	sizeof(int), 1, fp[j]);
 				mm_err_fread(&rep_len_part[j],  sizeof(int), 1, fp[j]);
 				mm_err_fread(&frag_gap_part[j], sizeof(int), 1, fp[j]);
 				s->n_reg[k] += n_reg_part[j];
@@ -788,13 +783,13 @@ static void merge_hits(step_t *s)
 static void *worker_pipeline(void *shared, int step, void *in)
 {
 	int i, j, k;
-    pipeline_t *p = (pipeline_t*)shared;
-    if (step == 0) { // step 0: read sequences
+	pipeline_t *p = (pipeline_t*)shared;
+	if (step == 0) { // step 0: read sequences
 		int with_qual = (!!(p->opt->flag & MM_F_OUT_SAM) && !(p->opt->flag & MM_F_NO_QUAL));
 		int with_comment = !!(p->opt->flag & MM_F_COPY_COMMENT);
 		int frag_mode = (p->n_fp > 1 || !!(p->opt->flag & MM_F_FRAG_MODE));
-        step_t *s;
-        s = (step_t*)calloc(1, sizeof(step_t));
+		step_t *s;
+		s = (step_t*)calloc(1, sizeof(step_t));
 		if (p->n_fp > 1) s->seq = mm_bseq_read_frag2(p->n_fp, p->fp, p->mini_batch_size, with_qual, with_comment, &s->n_seq);
 		else s->seq = mm_bseq_read3(p->fp[0], p->mini_batch_size, with_qual, with_comment, frag_mode, &s->n_seq);
 		if (s->seq) {
@@ -818,13 +813,13 @@ static void *worker_pipeline(void *shared, int step, void *in)
 				}
 			return s;
 		} else free(s);
-    } else if (step == 1) { // step 1: map
+	} else if (step == 1) { // step 1: map
 		if (p->n_parts > 0) merge_hits((step_t*)in);
 		else kt_for(p->n_threads, worker_for, in, ((step_t*)in)->n_frag);
 		return in;
-    } else if (step == 2) { // step 2: output
+	} else if (step == 2) { // step 2: output
 		void *km = 0;
-        step_t *s = (step_t*)in;
+		step_t *s = (step_t*)in;
 		const mm_idx_t *mi = p->mi;
 		for (i = 0; i < p->n_threads; ++i) mm_tbuf_destroy(s->buf[i]);
 		free(s->buf);
@@ -886,7 +881,7 @@ static void *worker_pipeline(void *shared, int step, void *in)
 			fprintf(stderr, "[M::%s::%.3f*%.2f] mapped %d sequences\n", __func__, realtime() - mm_realtime0, cputime() / (realtime() - mm_realtime0), s->n_seq);
 		free(s);
 	}
-    return 0;
+	return 0;
 }
 
 static mm_bseq_file_t **open_bseqs(int n, const char **fn)
