@@ -227,14 +227,12 @@ static mm_reg1_t *align_regs(const mm_mapopt_t *opt, const mm_idx_t *mi, void *k
 // collecting unique chromosome names found for the current read
 char **collect_seed_chromosome_names(const mm_idx_t *mi, int n_a, mm_reg1_t *regs)
 {
-	int max_chromosomes = 32;
-
-	char **chromosome_names = CALLOC(char*, max_chromosomes);
+	char **chromosome_names = CALLOC(char*, n_a);
 	const char* best_alignment;
 	char* best_copy;
 	const char* delete_name = "delete";
 	int i;
-	for (i = 0; i < max_chromosomes; ++i) {
+	for (i = 0; i < n_a; ++i) {
 		chromosome_names[i] = NULL;
 	}
 	if (regs != NULL) {
@@ -256,7 +254,7 @@ char **collect_seed_chromosome_names(const mm_idx_t *mi, int n_a, mm_reg1_t *reg
 		if (max_score_i != 0) {
 			mm_reg1_t tmp = regs[0];
 			regs[0] = regs[max_score_i];
-            regs[max_score_i] = tmp;
+                        regs[max_score_i] = tmp;
 
 			regs[max_score_i].id = regs[0].id;
 			regs[0].id = tmp.id;
@@ -266,6 +264,8 @@ char **collect_seed_chromosome_names(const mm_idx_t *mi, int n_a, mm_reg1_t *reg
 
 			regs[max_score_i].n_sub = regs[0].n_sub;
 			regs[0].n_sub = tmp.n_sub;
+
+                        regs[0].parent = 0;
 		}
 
 
@@ -274,7 +274,7 @@ char **collect_seed_chromosome_names(const mm_idx_t *mi, int n_a, mm_reg1_t *reg
 			char *curr_copy;
 			char *output;
 			char *best;
-
+                        regs[i].parent = 0;
 			best_alignment = mi->seq[regs[0].rid].name;
 			best_copy = strdup(best_alignment);
 			curr_name = mi->seq[regs[i].rid].name;
@@ -518,6 +518,7 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 		regs0 = align_regs(opt, mi, b->km, qlens[0], seqs[0], &n_regs0, regs0, a);
 		regs0 = (mm_reg1_t*)realloc(regs0, sizeof(*regs0) * n_regs0);
 
+                int chrs_to_drop_count = n_regs0;
 		chrs_to_drop = collect_seed_chromosome_names(mi, n_regs0, regs0);
 
 		int z;
@@ -548,14 +549,17 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 		}
 
 		mm_set_mapq2(b->km, n_regs0, regs0, opt->min_chain_score, opt->a, rep_len, is_sr || is_sr_rna, is_splice, chrs_to_drop);
+                free_chromosome_names(chrs_to_drop, chrs_to_drop_count);
 		n_regs[0] = n_regs0, regs[0] = regs0;
 	} else { // multi-segment
 		mm_seg_t *seg;
 		seg = mm_seg_gen(b->km, hash, n_segs, qlens, n_regs0, regs0, n_regs, regs, a); // split fragment chain to separate segment chains
-		for (i = 0; i < n_segs; ++i) {
+	        free (regs0);
+                for (i = 0; i < n_segs; ++i) {
 			mm_set_parent(b->km, opt->mask_level, opt->mask_len, n_regs[i], regs[i], opt->a * 2 + opt->b, opt->flag&MM_F_HARD_MLEVEL, opt->alt_drop); // update mm_reg1_t::parent
-			regs[i] = align_regs(opt, mi, b->km, qlens[i], seqs[i], &n_regs[i], regs[i], seg[i].a);
-			
+                        regs[i] = align_regs(opt, mi, b->km, qlens[i], seqs[i], &n_regs[i], regs[i], seg[i].a);
+
+			int chrs_to_drop_count = n_regs[i];
 			chrs_to_drop = collect_seed_chromosome_names(mi, n_regs[i], regs[i]);
 			
 			int z;
@@ -570,6 +574,8 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 			int max_score = 0;
 			for (z = 1; z < n_regs[i]; z++) {
 				regs[i][z].id = z;
+                                if (regs[i][z].parent != 0)
+                                fprintf(stderr, "parent\t%d\n", regs[i][z].parent);
 				if (regs[i][z].p->dp_score > max_dpmax2) {
 					max_dpmax2 = regs[i][z].p->dp_score;
 				}
@@ -585,15 +591,13 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 			}
 
 			mm_set_mapq2(b->km, n_regs[i], regs[i], opt->min_chain_score, opt->a, rep_len, is_sr || is_sr_rna, is_splice, chrs_to_drop);
-
+                        free_chromosome_names(chrs_to_drop, chrs_to_drop_count);
 		}
-		free(regs0);
 		mm_seg_free(b->km, n_segs, seg);
 		if (n_segs == 2 && opt->pe_ori >= 0 && (opt->flag&MM_F_CIGAR))
 			mm_pair(b->km, max_chain_gap_ref, opt->pe_bonus, opt->a * 2 + opt->b, opt->a, qlens, n_regs, regs); // pairing
 	}
 
-	free_chromosome_names(chrs_to_drop, 32);
 
 	kfree(b->km, mv.a);
 	kfree(b->km, a);
@@ -851,7 +855,7 @@ static void *worker_pipeline(void *shared, int step, void *in)
 				} else if (s->n_reg[i] > 0) { // the query has at least one hit
 					for (j = 0; j < s->n_reg[i]; ++j) {
 						const mm_reg1_t *r = &s->reg[i][j];
-						//assert(!r->sam_pri || r->id == r->parent);
+						assert(!r->sam_pri || r->id == r->parent);
 						if ((p->opt->flag & MM_F_NO_PRINT_2ND) && r->id != r->parent)
 							continue;
 						if (p->opt->flag & MM_F_OUT_SAM)
