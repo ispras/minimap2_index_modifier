@@ -239,7 +239,7 @@ char **collect_seed_chromosome_names(const mm_idx_t *mi, int n_a, mm_reg1_t *reg
 		int max_score = 0;
 		int max_score_i = 0;
 		int max_score_rid = 0;
-		for (i = 1; i < n_a; ++i) {
+		for (i = 0; i < n_a; ++i) {
 			if (regs[i].score0 > max_score) {
 				max_score = regs[i].score0;
 				max_score_rid = regs[i].rid;
@@ -394,6 +394,8 @@ mm_reg1_t* remove_second_suboptimal_alignment(mm_reg1_t *regs, int *num_regs, in
 	(*num_regs)--;
 
 	regs = (mm_reg1_t*)realloc(regs, (*num_regs) * sizeof(*regs));
+    regs[0].n_sub--;
+    assert(regs[0].n_sub < 0);
 
 	return regs;
 }
@@ -523,7 +525,6 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 		for (z = n_regs0 - 1; z > 0; z--) {
 			if (chrs_to_drop[z] != NULL && strcmp(chrs_to_drop[z], delete_name) == 0) {
 				regs0 = remove_second_suboptimal_alignment(regs0, &n_regs0, z);
-				regs0[0].n_sub = n_regs0 - 1;
 			}
 		}
 
