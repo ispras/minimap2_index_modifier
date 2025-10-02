@@ -378,10 +378,12 @@ void free_chromosome_info(chromosome_info_t *chr_info, int n_chromosomes) {
 }
 
 // delete second alignment (to improve mapq)
-mm_reg1_t* remove_second_suboptimal_alignment(mm_reg1_t *regs, int *num_regs, int z) {
+mm_reg1_t* remove_second_suboptimal_alignment(mm_reg1_t *regs, int *num_regs, int z, int sub_diff) {
 	if (!regs || *num_regs < 2) {
 		return regs;
 	}
+    if (regs[0].p->dp_max - regs[z].p->dp_max <= sub_diff) regs[0].n_sub--;
+    assert(regs[0].n_sub < 0);
 
 	if (regs[z].p) {
 		free(regs[z].p);
@@ -394,8 +396,6 @@ mm_reg1_t* remove_second_suboptimal_alignment(mm_reg1_t *regs, int *num_regs, in
 	(*num_regs)--;
 
 	regs = (mm_reg1_t*)realloc(regs, (*num_regs) * sizeof(*regs));
-    regs[0].n_sub--;
-    assert(regs[0].n_sub < 0);
 
 	return regs;
 }
@@ -524,7 +524,7 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 		char* delete_name = "delete";
 		for (z = n_regs0 - 1; z > 0; z--) {
 			if (chrs_to_drop[z] != NULL && strcmp(chrs_to_drop[z], delete_name) == 0) {
-				regs0 = remove_second_suboptimal_alignment(regs0, &n_regs0, z);
+				regs0 = remove_second_suboptimal_alignment(regs0, &n_regs0, z, opt->a * 2 + opt->b);
 			}
 		}
 
@@ -564,7 +564,7 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 			char* delete_name = "delete";
 			for (z = n_regs[i] - 1; z > 0; z--) {
 				if (chrs_to_drop[z] != NULL && strcmp(chrs_to_drop[z], delete_name) == 0) {
-					regs[i] = remove_second_suboptimal_alignment(regs[i], &n_regs[i], z);
+					regs[i] = remove_second_suboptimal_alignment(regs[i], &n_regs[i], z, opt->a * 2 + opt->b);
 				}
 			}
 
