@@ -236,38 +236,18 @@ char **collect_seed_chromosome_names(const mm_idx_t *mi, int n_a, mm_reg1_t *reg
 		chromosome_names[i] = NULL;
 	}
 	if (regs != NULL) {
-		int max_score = 0;
-		int max_score_i = 0;
-		int max_score_rid = 0;
-		for (i = 0; i < n_a; ++i) {
-			if (regs[i].score0 > max_score) {
-				max_score = regs[i].score0;
-				max_score_rid = regs[i].rid;
-				max_score_i = i;
-
-			} else if (regs[i].score0 == max_score && regs[i].rid < max_score_rid) {
-				max_score_rid = regs[i].rid;
-				max_score_i = i;
-			}
-		}
-
-		if (max_score_i != 0) {
+		if (regs[0].parent != 0) {
+            int parent_id = regs[0].parent;
 			mm_reg1_t tmp = regs[0];
-			regs[0] = regs[max_score_i];
-			regs[max_score_i] = tmp;
+			regs[0] = regs[parent_id];
+			regs[parent_id] = tmp;
 
-			regs[max_score_i].id = regs[0].id;
+			regs[parent_id].id = regs[0].id;
 			regs[0].id = tmp.id;
 
-			regs[max_score_i].sam_pri = regs[0].sam_pri;
-			regs[0].sam_pri = tmp.sam_pri;
-
-			regs[max_score_i].n_sub = regs[0].n_sub;
-			regs[0].n_sub = tmp.n_sub;
-
 			regs[0].parent = 0;
+            regs[parent_id].parent = 0;
 		}
-
 
 		for (i = 1; i < n_a; ++i) {
 			const char *curr_name;
@@ -386,7 +366,7 @@ mm_reg1_t* remove_second_suboptimal_alignment(mm_reg1_t *regs, int *num_regs, in
         regs[z].cnt >= regs[0].cnt) {
         regs[0].n_sub--;
     }
-    assert(regs[0].n_sub < 0);
+    assert(regs[0].n_sub >= 0);
 
 	if (regs[z].p) {
 		free(regs[z].p);
