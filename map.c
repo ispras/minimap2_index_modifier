@@ -565,8 +565,12 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 					regs[i][0].p->dp_max2 = max_dpmax2;
 				regs[i][0].subsc = max_score;
 			}*/
+            mm_reg1_t *copy = malloc(sizeof *copy * n_regs[i]);
+            memcpy(copy, regs[i], sizeof *copy * n_regs[i]);
+			mm_set_mapq2(b->km, n_regs[i], copy, opt->min_chain_score, opt->a, rep_len, is_sr || is_sr_rna, is_splice, chrs_to_drop);
+   			regs[i][0].n_sub = copy[copy[0].parent].n_sub;
+   			free(copy);
 
-			mm_set_mapq2(b->km, n_regs[i], regs[i], opt->min_chain_score, opt->a, rep_len, is_sr || is_sr_rna, is_splice, chrs_to_drop);
 			free_chromosome_names(chrs_to_drop, chrs_to_drop_count);
 		}
 		mm_seg_free(b->km, n_segs, seg);
