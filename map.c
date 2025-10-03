@@ -363,12 +363,6 @@ mm_reg1_t* remove_second_suboptimal_alignment(mm_reg1_t *regs, int *num_regs, in
 		return regs;
 	}
 
-	if (((regs[0].n_sub != 0) && (regs[0].rid != regs[z].rid || regs[0].rs != regs[z].rs || regs[0].re != regs[z].re) &&
-        (regs[0].p->dp_max - regs[z].p->dp_max <= sub_diff)) || (regs[z].cnt >= regs[0].cnt)) {
-		regs[0].n_sub--;
-	}
-	assert(regs[0].n_sub >= 0);
-
 	if (regs[z].p) {
 		free(regs[z].p);
 	}
@@ -552,6 +546,8 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 				}
 			}
 
+			mm_set_parent(b->km, opt->mask_level, opt->mask_len, n_regs[i], regs[i], opt->a * 2 + opt->b, opt->flag&MM_F_HARD_MLEVEL, opt->alt_drop); // update mm_reg1_t::parent
+   			/*
 			int max_dpmax2 = 0;
 			int max_score = 0;
 			for (z = 1; z < n_regs[i]; z++) {
@@ -568,7 +564,7 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 				if (regs[i][0].p != NULL)
 					regs[i][0].p->dp_max2 = max_dpmax2;
 				regs[i][0].subsc = max_score;
-			}
+			}*/
 
 			mm_set_mapq2(b->km, n_regs[i], regs[i], opt->min_chain_score, opt->a, rep_len, is_sr || is_sr_rna, is_splice, chrs_to_drop);
 			free_chromosome_names(chrs_to_drop, chrs_to_drop_count);
