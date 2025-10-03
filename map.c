@@ -363,8 +363,8 @@ mm_reg1_t* remove_second_suboptimal_alignment(mm_reg1_t *regs, int *num_regs, in
 		return regs;
 	}
 
-	if (((regs[0].rid != regs[z].rid || regs[0].rs != regs[z].rs || regs[0].re != regs[z].re) &&
-   		(regs[0].p->dp_max - regs[z].p->dp_max <= sub_diff)) || (regs[z].cnt >= regs[0].cnt)) {
+	if (((regs[0].n_sub != 0) && (regs[0].rid != regs[z].rid || regs[0].rs != regs[z].rs || regs[0].re != regs[z].re) &&
+        (regs[0].p->dp_max - regs[z].p->dp_max <= sub_diff)) || (regs[z].cnt >= regs[0].cnt)) {
 		regs[0].n_sub--;
 	}
 	assert(regs[0].n_sub >= 0);
