@@ -237,7 +237,7 @@ char **collect_seed_chromosome_names(const mm_idx_t *mi, int n_a, mm_reg1_t *reg
 	}
 	if (regs != NULL) {
 		if (regs[0].parent != 0) {
-            int parent_id = regs[0].parent;
+			int parent_id = regs[0].parent;
 			mm_reg1_t tmp = regs[0];
 			regs[0] = regs[parent_id];
 			regs[parent_id] = tmp;
@@ -246,7 +246,7 @@ char **collect_seed_chromosome_names(const mm_idx_t *mi, int n_a, mm_reg1_t *reg
 			regs[0].id = tmp.id;
 
 			regs[0].parent = 0;
-            regs[parent_id].parent = 0;
+			regs[parent_id].parent = 0;
 		}
 
 		for (i = 1; i < n_a; ++i) {
@@ -362,11 +362,17 @@ mm_reg1_t* remove_second_suboptimal_alignment(mm_reg1_t *regs, int *num_regs, in
 	if (!regs || *num_regs < 2) {
 		return regs;
 	}
-    if ((regs[0].rid != regs[z].rid || regs[0].rs != regs[z].rs || regs[0].re != regs[z].re) && regs[0].p->dp_max - regs[z].p->dp_max <= sub_diff ||
-        regs[z].cnt >= regs[0].cnt) {
-        regs[0].n_sub--;
-    }
-    assert(regs[0].n_sub >= 0);
+
+ 	int sj = regs[0].qs, ej = regs[0].qe, min, ol;
+	int si = regs[z].qs, ei = regs[z].qe;
+	min = ej - sj < ei - si? ej - sj : ei - si;
+	ol = si < sj? (ei < sj? 0 : ei < ej? ei - sj : ej - sj) : (ej < si? 0 : ej < ei? ej - si : ei - si);
+
+	if (((regs[0].rid != regs[z].rid || regs[0].rs != regs[z].rs || regs[0].re != regs[z].re || ol != min) &&
+   		(regs[0].p->dp_max - regs[z].p->dp_max <= sub_diff)) || (regs[z].cnt >= regs[0].cnt)) {
+		regs[0].n_sub--;
+	}
+	assert(regs[0].n_sub >= 0);
 
 	if (regs[z].p) {
 		free(regs[z].p);
