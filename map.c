@@ -562,7 +562,7 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 
 				if (regs[i][0].p != NULL)
 					regs[i][0].p->dp_max2 = max_dpmax2;
-	 			regs0[0].subsc = max_score;
+	 			regs[i][0].subsc = max_score;
 
 				mm_reg1_t *copy = (mm_reg1_t *)malloc(n_regs[i] * sizeof(mm_reg1_t));
 				memcpy(copy, regs[i], n_regs[i] * sizeof(mm_reg1_t));
