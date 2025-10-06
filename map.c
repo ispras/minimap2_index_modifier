@@ -566,6 +566,7 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 
 				mm_reg1_t *copy = (mm_reg1_t *)malloc(n_regs[i] * sizeof(mm_reg1_t));
 				memcpy(copy, regs[i], n_regs[i] * sizeof(mm_reg1_t));
+	 			copy[0].n_sub = 0;
  				mm_set_parent(b->km, opt->mask_level, opt->mask_len, n_regs[i], copy, opt->a * 2 + opt->b, opt->flag&MM_F_HARD_MLEVEL, opt->alt_drop); // update mm_reg1_t::parent
 	 			regs[i][0].n_sub = copy[0].n_sub;
 
