@@ -545,8 +545,9 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 					regs[i] = remove_second_suboptimal_alignment(regs[i], &n_regs[i], z, opt->a * 2 + opt->b);
 				}
 			}
-   
+
 			mm_set_parent(b->km, opt->mask_level, opt->mask_len, n_regs[i], regs[i], opt->a * 2 + opt->b, opt->flag&MM_F_HARD_MLEVEL, opt->alt_drop); // update mm_reg1_t::parent
+			regs[i] = align_regs(opt, mi, b->km, qlens[i], seqs[i], &n_regs[i], regs[i], seg[i].a);
 
 			mm_set_mapq2(b->km, n_regs[i], regs[i], opt->min_chain_score, opt->a, rep_len, is_sr || is_sr_rna, is_splice, chrs_to_drop);
 			free_chromosome_names(chrs_to_drop, chrs_to_drop_count);
