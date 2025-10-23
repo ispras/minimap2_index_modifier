@@ -11,6 +11,7 @@
 #include <htslib/tbx.h>
 #include <htslib/kstring.h>
 #include <htslib/kseq.h>
+#include <htslib/synced_bcf_reader.h>
 
 #define MM_PARENT_UNSET   (-1)
 #define MM_PARENT_TMP_PRI (-2)
@@ -68,6 +69,11 @@ typedef struct {
 	uint16_t flag;
 } mm_idx_jjump1_t;
 
+typedef struct {
+    bcf_srs_t *sr;
+    bcf_hdr_t *hdr;
+} vcf_ctx_t;
+
 double cputime(void);
 double realtime(void);
 long peakrss(void);
@@ -78,7 +84,9 @@ uint32_t ks_ksmall_uint32_t(size_t n, uint32_t arr[], size_t kk);
 
 void mm_sketch(void *km, const char *str, int len, int w, int k, uint32_t rid, int is_hpc, mm128_v *p);
 void mm_idx_manipulate(mm_idx_t * mi, char *vcf_with_variants);
-void mm_idx_manipulate_phased(mm_idx_t * mi, char * fname, mm128_v *p, char * contig_name);
+void mm_idx_manipulate_phased(mm_idx_t * mi, char * fname, mm128_v *p, vcf_ctx_t * ctx, char * contig_name);
+int  vcf_open_synced(const char * fname, int n_threads, vcf_ctx_t * ctx);
+void vcf_close_synced(vcf_ctx_t * ctx);
 void add_variants(mm_idx_t * mi, const char * CHR, char ** REF_arr, char ** ALT_arr, unsigned long * POS_all, int N_SNP, unsigned long curr_pos, mm128_v *p);
 void add_indel(mm_idx_t * mi, const char * CHR, char * REF, char * ALT, unsigned long curr_pos, unsigned long indel_pos, mm128_v *p, const char * original_ref_seq);
 

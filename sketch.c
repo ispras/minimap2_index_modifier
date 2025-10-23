@@ -13,6 +13,7 @@
 #include <htslib/tbx.h>
 #include <htslib/kstring.h>
 #include <htslib/kseq.h>
+#include <htslib/synced_bcf_reader.h>
 
 unsigned char seq_nt4_table[256] = {
 	0, 1, 2, 3,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
@@ -270,8 +271,52 @@ void read_vcf(mm_idx_t *mi, char *fname, mm128_v *p, char *contig_name) {
     hts_close(fp);
 }
 
-void mm_idx_manipulate_phased(mm_idx_t * mi, char * fname, mm128_v *p, char * contig_name) {
-    read_vcf(mi, fname, p, contig_name);
+int vcf_open_synced(const char *fname, int n_threads, vcf_ctx_t *ctx) {
+    ctx->sr = bcf_sr_init();
+    if (!ctx->sr) return -1;
+    bcf_sr_set_opt(ctx->sr, BCF_SR_REQUIRE_IDX);
+    if (n_threads > 1) bcf_sr_set_threads(ctx->sr, n_threads);
+    if (!bcf_sr_add_reader(ctx->sr, fname)) return -1;
+    ctx->hdr = bcf_sr_get_header(ctx->sr, 0);
+    return ctx->hdr ? 0 : -1;
+}
+
+int vcf_synced_contig(vcf_ctx_t *ctx, const char *contig, mm_idx_t *mi, mm128_v *p) {
+    int rid_target = bcf_hdr_name2id(ctx->hdr, contig);
+    if (rid_target < 0) return 0;
+
+    if (bcf_sr_seek(ctx->sr, contig, 0) < 0) return 0;
+
+    int n = 0;
+    while (bcf_sr_next_line(ctx->sr)) {
+        bcf1_t *rec = bcf_sr_get_line(ctx->sr, 0);
+        if (!rec) continue;
+
+        /* STOP: break as soon as HTSlib advances past the requested contig */
+        if (rec->rid != rid_target) break;
+
+        /* Unpack only what is needed */
+        bcf_unpack(rec, BCF_UN_STR); /* REF/ALT */
+        /* bcf_unpack(rec, BCF_UN_INFO); // enable only if INFO is required */
+
+        process_vcf_record(rec, ctx->hdr, mi, p);
+        ++n;
+    }
+
+    /* Flush any pending state to match the original contract */
+    if (!isListEmpty()) {
+        handleGTList(mi, ctx->hdr, p);
+        deleteList();
+    }
+    return n;
+}
+
+void vcf_close_synced(vcf_ctx_t *ctx) {
+    if (ctx->sr) bcf_sr_destroy(ctx->sr);
+}
+
+void mm_idx_manipulate_phased(mm_idx_t * mi, char * fname, mm128_v *p, vcf_ctx_t * ctx, char * contig_name) {
+    vcf_synced_contig(ctx, contig_name, mi, p);
 }
 
 //REF - REF (for control)
