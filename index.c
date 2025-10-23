@@ -377,8 +377,14 @@ static void *worker_pipeline(void *shared, int step, void *in)
     } else if (step == 1) { // step 1: compute sketch
         step_t *s = (step_t*)in;
 
+	    vcf_ctx_t ctx;
+	    if (vcf_open_synced(p->vcf_with_variants, 4, &ctx) != 0) {
+	        fprintf(stderr, "ERROR: failed to open %s with index\n", p->vcf_with_variants);
+	        return NULL;
+	    }
+
 		for (i = 0; i < s->n_seq; ++i) {
-			//printf("SEQ %d %s\n", s->n_seq, s->seq[i].name);
+			printf("SEQ %d %s\n", s->n_seq, s->seq[i].name);
 			mm_bseq1_t *t = &s->seq[i];
 			if (t->l_seq > 0)
 				mm_sketch(0, t->seq, t->l_seq, p->mi->w, p->mi->k, t->rid, p->mi->flag&MM_I_HPC, &s->a);
@@ -386,13 +392,14 @@ static void *worker_pipeline(void *shared, int step, void *in)
 				fprintf(stderr, "[WARNING] the length database sequence '%s' is 0\n", t->name);
 
 			if(p->vcf_with_variants && strcmp(p->vcf_with_variants, "")) {
-				mm_idx_manipulate_phased(p->mi, p->vcf_with_variants, &s->a, s->seq[i].name);
+				mm_idx_manipulate_phased(p->mi, p->vcf_with_variants, &s->a, &ctx, s->seq[i].name);
 			}
 
 			free(t->seq); free(t->name);
 		}
 
 		free(s->seq); s->seq = 0;
+        vcf_close_synced(&ctx);
 
 		// sort by minimizer
 		radix_sort_128x(s->a.a, s->a.a + s->a.n);
