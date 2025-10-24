@@ -494,7 +494,7 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 	if (n_segs == 1) { // uni-segment
 		regs0 = align_regs(opt, mi, b->km, qlens[0], seqs[0], &n_regs0, regs0, a);
 		regs0 = (mm_reg1_t*)realloc(regs0, sizeof(*regs0) * n_regs0);
-
+        /*
 		int chrs_to_drop_count = n_regs0;
 		chrs_to_drop = collect_seed_chromosome_names(mi, n_regs0, regs0);
 
@@ -522,10 +522,10 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 			if (regs0[0].p != NULL)
 				regs0[0].p->dp_max2 = max_dpmax2;
 			regs0[0].subsc = max_score;
-		}
+		}*/
 
 		mm_set_mapq2(b->km, n_regs0, regs0, opt->min_chain_score, opt->a, rep_len, is_sr || is_sr_rna, is_splice, chrs_to_drop);
-		free_chromosome_names(chrs_to_drop, chrs_to_drop_count);
+		//free_chromosome_names(chrs_to_drop, chrs_to_drop_count);
 		n_regs[0] = n_regs0, regs[0] = regs0;
 	} else { // multi-segment
 		mm_seg_t *seg;
@@ -535,9 +535,11 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 			mm_set_parent(b->km, opt->mask_level, opt->mask_len, n_regs[i], regs[i], opt->a * 2 + opt->b, opt->flag&MM_F_HARD_MLEVEL, opt->alt_drop); // update mm_reg1_t::parent
 			regs[i] = align_regs(opt, mi, b->km, qlens[i], seqs[i], &n_regs[i], regs[i], seg[i].a);
 
+            /*
 			int chrs_to_drop_count = n_regs[i];
 			chrs_to_drop = collect_seed_chromosome_names(mi, n_regs[i], regs[i]);
 			
+
 			int z;
 			char* delete_name = "delete";
 			for (z = n_regs[i] - 1; z > 0; z--) {
@@ -571,10 +573,12 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 	 			regs[i][0].n_sub = copy[0].n_sub;
 
  				free(copy);
-			}
 
+			}
+            */
 			mm_set_mapq2(b->km, n_regs[i], regs[i], opt->min_chain_score, opt->a, rep_len, is_sr || is_sr_rna, is_splice, chrs_to_drop);
-			free_chromosome_names(chrs_to_drop, chrs_to_drop_count);
+			//free_chromosome_names(chrs_to_drop, chrs_to_drop_count);
+
 		}
 		mm_seg_free(b->km, n_segs, seg);
 		if (n_segs == 2 && opt->pe_ori >= 0 && (opt->flag&MM_F_CIGAR))
