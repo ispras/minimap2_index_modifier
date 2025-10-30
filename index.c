@@ -378,7 +378,7 @@ static void *worker_pipeline(void *shared, int step, void *in)
         step_t *s = (step_t*)in;
 
 	    vcf_ctx_t ctx;
-	    if (vcf_open_synced(p->vcf_with_variants, 4, &ctx) != 0) {
+        if (p->vcf_with_variants && strcmp(p->vcf_with_variants, "") && vcf_open_synced(p->vcf_with_variants, 4, &ctx) != 0) {
 	        fprintf(stderr, "ERROR: failed to open %s with index\n", p->vcf_with_variants);
 	        return NULL;
 	    }
