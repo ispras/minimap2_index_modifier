@@ -286,6 +286,23 @@ static int mmq_use_projection(void)
 	return cached;
 }
 
+/* Disagreement between the two rules, counted on whatever data is being mapped.
+ * mmq_name_only is the case the paper cares about: the name rule discards a
+ * candidate whose projection does NOT meet the best one's, i.e. it destroys a
+ * genuinely independent hypothesis. Reported at exit; costs one comparison
+ * per candidate, so it can be left on for a production run. */
+#define MMQ_RULE(v) __atomic_fetch_add(&(v), 1, __ATOMIC_RELAXED)
+static long mmq_agree = 0, mmq_name_only = 0, mmq_proj_only = 0, mmq_neither = 0;
+__attribute__((destructor)) static void mmq_rule_report(void)
+{
+	long tot = mmq_agree + mmq_name_only + mmq_proj_only + mmq_neither;
+	if (tot == 0) return;
+	fprintf(stderr, "[mmq-rules] candidates=%ld agree=%ld name_only=%ld proj_only=%ld neither=%ld"
+			" (name_only = candidates the name rule wrongly collapses: %.3f%%)\n",
+			tot, mmq_agree, mmq_name_only, mmq_proj_only, mmq_neither,
+			tot ? 100.0 * mmq_name_only / tot : 0.0);
+}
+
 static int mmq_prefer_t(void)
 {
 	static int cached = -1;
@@ -367,6 +384,24 @@ char **collect_seed_chromosome_names(const mm_idx_t *mi, int n_a, mm_reg1_t *reg
 			curr_copy = strdup(curr_name);
 
 			if (i == 1 && mmq_prefer_t()) mmq_prefer_t_representative(mi, n_a, regs);
+			{	/* count how often the two rules disagree, whichever is in force */
+				mmq_proj_t qb, qc;
+				int by_name, by_proj;
+				mmq_project(mi, &regs[0], &qb);
+				mmq_project(mi, &regs[i], &qc);
+				by_proj = mmq_equivalent(&qb, &qc);
+				by_name = (strstr(curr_name, "contig") != NULL);
+				if (!by_name && strstr(best_alignment, "contig") != NULL) {
+					char *b2 = strdup(best_alignment), *c2 = strdup(curr_name);
+					char *bt = strtok(b2, "_"), *ct = strtok(c2, "_");
+					by_name = (bt && ct && strcmp(bt, ct) == 0);
+					free(b2); free(c2);
+				}
+				if (by_name && by_proj)        MMQ_RULE(mmq_agree);
+				else if (by_name && !by_proj)  MMQ_RULE(mmq_name_only);
+				else if (!by_name && by_proj)  MMQ_RULE(mmq_proj_only);
+				else                           MMQ_RULE(mmq_neither);
+			}
 			if (mmq_use_projection()) {
 				mmq_proj_t pb, pc;
 				mmq_project(mi, &regs[0], &pb);
