@@ -377,14 +377,14 @@ static void *worker_pipeline(void *shared, int step, void *in)
     } else if (step == 1) { // step 1: compute sketch
         step_t *s = (step_t*)in;
 
-	    vcf_ctx_t ctx;
+	    vcf_ctx_t ctx = {0}; /* must be zeroed: vcf_close_synced() below runs unconditionally */
         if (p->vcf_with_variants && strcmp(p->vcf_with_variants, "") && vcf_open_synced(p->vcf_with_variants, 4, &ctx) != 0) {
 	        fprintf(stderr, "ERROR: failed to open %s with index\n", p->vcf_with_variants);
 	        return NULL;
 	    }
 
 		for (i = 0; i < s->n_seq; ++i) {
-			printf("SEQ %d %s\n", s->n_seq, s->seq[i].name);
+			if (mm_verbose >= 3) fprintf(stderr, "SEQ %d %s\n", s->n_seq, s->seq[i].name);
 			mm_bseq1_t *t = &s->seq[i];
 			if (t->l_seq > 0)
 				mm_sketch(0, t->seq, t->l_seq, p->mi->w, p->mi->k, t->rid, p->mi->flag&MM_I_HPC, &s->a);

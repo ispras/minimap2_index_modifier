@@ -340,7 +340,7 @@ void add_indel(mm_idx_t * mi, const char * CHR, char * REF, char * ALT, unsigned
     }
     // Error if no contigs in fasta
     if(seq_num == -1) {
-        printf("ERROR Contig %s id not found in reference\n", contig_name);
+        fprintf(stderr, "ERROR Contig %s id not found in reference\n", contig_name);
         return;
     }
 
@@ -490,7 +490,7 @@ void add_variants(mm_idx_t * mi, const char * CHR, char ** REF_arr, char ** ALT_
     }
     //Error if no contigs in fasta
     if(seq_num == -1) {
-        printf("ERROR Contig %s id not found in reference\n", snp_contig_name);
+        fprintf(stderr, "ERROR Contig %s id not found in reference\n", snp_contig_name);
         return;
     }
 
