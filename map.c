@@ -225,6 +225,112 @@ static mm_reg1_t *align_regs(const mm_mapopt_t *opt, const mm_idx_t *mi, void *k
 }
 
 // collecting unique chromosome names found for the current read
+/* ------------------------------------------------------------------------
+ * Equivalence of candidate alignments by projection onto the base reference.
+ *
+ * An augmented reference is T' = T + contigs, and the contigs are named
+ * "<chrom>_contig_<pos>", where <pos> is the coordinate of the variant on
+ * <chrom>. A contig is therefore a copy of T[pos-w .. pos+w] with one variant
+ * applied, so *any* alignment inside it projects, under the coordinate map
+ * lambda, into [pos - L, pos + L] on <chrom>, where L is the contig length.
+ * That bound is valid for every flank w <= L and needs no extra input file:
+ * the name and the length are both already in the index.
+ *
+ * Two candidates are equivalent iff their projections overlap as intervals
+ * in T. This is the relation ~ from the formal model; the name-only rule it
+ * replaces discards every contig candidate regardless of locus, which merges
+ * candidates that really are independent hypotheses and inflates mapq.
+ *
+ * Switched with MMQ_PROJECTION=1 so that one binary can run both rules.
+ * Before publication this belongs in options.c as a proper flag.
+ * ---------------------------------------------------------------------- */
+typedef struct {
+	const char *chrom;
+	size_t chrom_len;
+	int64_t st, en;
+} mmq_proj_t;
+
+static void mmq_project(const mm_idx_t *mi, const mm_reg1_t *r, mmq_proj_t *pr)
+{
+	const char *name = mi->seq[r->rid].name;
+	const char *tag  = strstr(name, "_contig_");
+	if (tag == NULL) {                       /* already a sequence of T */
+		pr->chrom = name;
+		pr->chrom_len = strlen(name);
+		pr->st = r->rs;
+		pr->en = r->re;
+	} else {
+		int64_t pos = strtoll(tag + 8, NULL, 10);
+		int64_t len = (int64_t)mi->seq[r->rid].len;
+		pr->chrom = name;
+		pr->chrom_len = (size_t)(tag - name);
+		pr->st = pos - len;
+		pr->en = pos + len;
+	}
+}
+
+static int mmq_equivalent(const mmq_proj_t *a, const mmq_proj_t *b)
+{
+	if (a->chrom_len != b->chrom_len) return 0;
+	if (strncmp(a->chrom, b->chrom, a->chrom_len) != 0) return 0;
+	return a->st <= b->en && b->st <= a->en;
+}
+
+static int mmq_use_projection(void)
+{
+	static int cached = -1;
+	if (cached < 0) {
+		const char *e = getenv("MMQ_PROJECTION");
+		cached = (e && *e && *e != '0') ? 1 : 0;
+	}
+	return cached;
+}
+
+static int mmq_prefer_t(void)
+{
+	static int cached = -1;
+	if (cached < 0) {
+		const char *e = getenv("MMQ_PREFER_T");
+		cached = (e && *e && *e != '0') ? 1 : 0;
+	}
+	return cached;
+}
+
+/* Among equally-scoring members of the best candidate's class, keep the one
+ * that already lives on T. lambda is the identity there, so the read needs no
+ * lift-over, its mate stays in the same sequence, and its CIGAR is not split
+ * by the coordinate map. Only exact score ties are moved, so the alignment
+ * decision itself is untouched. */
+static void mmq_prefer_t_representative(const mm_idx_t *mi, int n_a, mm_reg1_t *regs)
+{
+	mmq_proj_t p0, pi;
+	int i;
+	if (n_a < 2 || regs == NULL) return;
+	if (strstr(mi->seq[regs[0].rid].name, "_contig_") == NULL) return; /* already on T */
+	if (regs[0].p == NULL) return;
+	mmq_project(mi, &regs[0], &p0);
+	for (i = 1; i < n_a; ++i) {
+		if (regs[i].p == NULL) continue;
+		if (strstr(mi->seq[regs[i].rid].name, "_contig_") != NULL) continue;
+		if (regs[i].p->dp_score != regs[0].p->dp_score) continue;
+		mmq_project(mi, &regs[i], &pi);
+		if (!mmq_equivalent(&p0, &pi)) continue;
+		{
+			/* sam_pri, id and parent belong to the slot, not to the record:
+			 * slot 0 stays the primary, only the alignment itself moves. */
+			mm_reg1_t tmp = regs[0];
+			uint32_t pri0 = regs[0].sam_pri, prii = regs[i].sam_pri;
+			int id0 = regs[0].id, idi = regs[i].id;
+			int par0 = regs[0].parent, pari = regs[i].parent;
+			regs[0] = regs[i];      regs[i] = tmp;
+			regs[0].id = id0;       regs[i].id = idi;
+			regs[0].parent = par0;  regs[i].parent = pari;
+			regs[0].sam_pri = pri0; regs[i].sam_pri = prii;
+		}
+		return;
+	}
+}
+
 char **collect_seed_chromosome_names(const mm_idx_t *mi, int n_a, mm_reg1_t *regs)
 {
 	char **chromosome_names = CALLOC(char*, n_a);
@@ -260,6 +366,15 @@ char **collect_seed_chromosome_names(const mm_idx_t *mi, int n_a, mm_reg1_t *reg
 			curr_name = mi->seq[regs[i].rid].name;
 			curr_copy = strdup(curr_name);
 
+			if (i == 1 && mmq_prefer_t()) mmq_prefer_t_representative(mi, n_a, regs);
+			if (mmq_use_projection()) {
+				mmq_proj_t pb, pc;
+				mmq_project(mi, &regs[0], &pb);
+				mmq_project(mi, &regs[i], &pc);
+				/* collapse only candidates that project onto the same locus */
+				if (mmq_equivalent(&pb, &pc))
+					chromosome_names[i] = strdup(delete_name);
+			} else {
 			if (strstr(curr_name, "contig") != NULL) {
 				chromosome_names[i] = strdup(delete_name);
 			}
@@ -269,6 +384,7 @@ char **collect_seed_chromosome_names(const mm_idx_t *mi, int n_a, mm_reg1_t *reg
 				if (best != NULL && output != NULL && strcmp(best, output) == 0) {
 					chromosome_names[i] = strdup(delete_name);
 				}
+			}
 			}
 
 			free(curr_copy);
