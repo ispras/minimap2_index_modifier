@@ -89,8 +89,8 @@ static ko_longopt_t long_options[] = {
 	{ "spsc0",          ko_required_argument, 364 },
 	{ "dbg-seed-occ",   ko_no_argument,       501 },
     { "vcf-file-with-variants",ko_required_argument, 700 },
-	{ "mapq-quotient", ko_no_argument,       701 },
-	{ "mapq-prefer-primary", ko_no_argument, 702 },
+	{ "mapq-quotient", ko_no_argument,       710 },
+	{ "mapq-prefer-primary", ko_no_argument, 711 },
     { "parse-haplotype",ko_no_argument,       701 },
 	{ "help",           ko_no_argument,       'h' },
 	{ "max-intron-len", ko_required_argument, 'G' },
@@ -270,8 +270,8 @@ int main(int argc, char *argv[])
 		else if (c == 363) spsc_scale = atof(o.arg); // --spsc-scale
 		else if (c == 358 || c == 364) opt.junc_pen = atoi(o.arg); // --junc-pen or --spsc0
         else if (c == 700) vcf_with_variants = o.arg; // --vcf-file-with-variants
-		else if (c == 701) opt.flag |= MM_F_MAPQ_QUOTIENT; // --mapq-quotient
-		else if (c == 702) opt.flag |= MM_F_MAPQ_PREFER_T; // --mapq-prefer-primary
+		else if (c == 710) opt.flag |= MM_F_MAPQ_QUOTIENT; // --mapq-quotient
+		else if (c == 711) opt.flag |= MM_F_MAPQ_PREFER_T; // --mapq-prefer-primary
         else if (c == 701) ipt.flag |= MM_PARSE_HT;  // --parse-haplotype
 		else if (c == 330) {
 			fprintf(stderr, "[WARNING] \033[1;31m --lj-min-ratio has been deprecated.\033[0m\n");

@@ -262,10 +262,14 @@ static void mmq_project(const mm_idx_t *mi, const mm_reg1_t *r, mmq_proj_t *pr)
 	} else {
 		int64_t pos = strtoll(tag + 8, NULL, 10);
 		int64_t len = (int64_t)mi->seq[r->rid].len;
+		/* контиг = T[p-w .. p-1] + alt + T[p+|ref| .. p+w-1], значит |c| = 2w + |alt| >= 2w,
+		 * откуда w <= |c|/2, а проекция лежит в [p - |c|/2, p + |c|/2].
+		 * Это по-прежнему оценка сверху, но вдвое точнее прежней [p-|c|, p+|c|]. */
+		int64_t half = len / 2 + 1;
 		pr->chrom = name;
 		pr->chrom_len = (size_t)(tag - name);
-		pr->st = pos - len;
-		pr->en = pos + len;
+		pr->st = pos - half;
+		pr->en = pos + half;
 	}
 }
 
@@ -289,9 +293,11 @@ __attribute__((destructor)) static void mmq_rule_report(void)
 	long tot = mmq_agree + mmq_name_only + mmq_proj_only + mmq_neither;
 	if (tot == 0) return;
 	fprintf(stderr, "[mmq-rules] candidates=%ld agree=%ld name_only=%ld proj_only=%ld neither=%ld"
-			" (name_only = candidates the name rule wrongly collapses: %.3f%%)\n",
+			" | name_only/all=%.3f%%",
 			tot, mmq_agree, mmq_name_only, mmq_proj_only, mmq_neither,
 			tot ? 100.0 * mmq_name_only / tot : 0.0);
+	{ long coll = mmq_agree + mmq_name_only;
+	  fprintf(stderr, " name_only/collapsed=%.1f%%\n", coll ? 100.0 * mmq_name_only / coll : 0.0); }
 }
 
 
@@ -354,6 +360,9 @@ char **collect_seed_chromosome_names(const mm_idx_t *mi, int n_a, mm_reg1_t *reg
 			regs[parent_id].parent = 0;
 		}
 
+		/* сделать до цикла: перестановка меняет regs[0], а имена читаются внутри цикла */
+		if (flag & MM_F_MAPQ_PREFER_T) mmq_prefer_t_representative(mi, n_a, regs);
+
 		for (i = 1; i < n_a; ++i) {
 			const char *curr_name;
 			char *curr_copy;
@@ -365,7 +374,6 @@ char **collect_seed_chromosome_names(const mm_idx_t *mi, int n_a, mm_reg1_t *reg
 			curr_name = mi->seq[regs[i].rid].name;
 			curr_copy = strdup(curr_name);
 
-			if (i == 1 && (flag & MM_F_MAPQ_PREFER_T)) mmq_prefer_t_representative(mi, n_a, regs);
 			{	/* count how often the two rules disagree, whichever is in force */
 				mmq_proj_t qb, qc;
 				int by_name, by_proj;
