@@ -276,15 +276,6 @@ static int mmq_equivalent(const mmq_proj_t *a, const mmq_proj_t *b)
 	return a->st <= b->en && b->st <= a->en;
 }
 
-static int mmq_use_projection(void)
-{
-	static int cached = -1;
-	if (cached < 0) {
-		const char *e = getenv("MMQ_PROJECTION");
-		cached = (e && *e && *e != '0') ? 1 : 0;
-	}
-	return cached;
-}
 
 /* Disagreement between the two rules, counted on whatever data is being mapped.
  * mmq_name_only is the case the paper cares about: the name rule discards a
@@ -303,15 +294,6 @@ __attribute__((destructor)) static void mmq_rule_report(void)
 			tot ? 100.0 * mmq_name_only / tot : 0.0);
 }
 
-static int mmq_prefer_t(void)
-{
-	static int cached = -1;
-	if (cached < 0) {
-		const char *e = getenv("MMQ_PREFER_T");
-		cached = (e && *e && *e != '0') ? 1 : 0;
-	}
-	return cached;
-}
 
 /* Among equally-scoring members of the best candidate's class, keep the one
  * that already lives on T. lambda is the identity there, so the read needs no
@@ -348,7 +330,7 @@ static void mmq_prefer_t_representative(const mm_idx_t *mi, int n_a, mm_reg1_t *
 	}
 }
 
-char **collect_seed_chromosome_names(const mm_idx_t *mi, int n_a, mm_reg1_t *regs)
+char **collect_seed_chromosome_names(const mm_idx_t *mi, int n_a, mm_reg1_t *regs, int64_t flag)
 {
 	char **chromosome_names = CALLOC(char*, n_a);
 	const char* best_alignment;
@@ -383,7 +365,7 @@ char **collect_seed_chromosome_names(const mm_idx_t *mi, int n_a, mm_reg1_t *reg
 			curr_name = mi->seq[regs[i].rid].name;
 			curr_copy = strdup(curr_name);
 
-			if (i == 1 && mmq_prefer_t()) mmq_prefer_t_representative(mi, n_a, regs);
+			if (i == 1 && (flag & MM_F_MAPQ_PREFER_T)) mmq_prefer_t_representative(mi, n_a, regs);
 			{	/* count how often the two rules disagree, whichever is in force */
 				mmq_proj_t qb, qc;
 				int by_name, by_proj;
@@ -402,7 +384,7 @@ char **collect_seed_chromosome_names(const mm_idx_t *mi, int n_a, mm_reg1_t *reg
 				else if (!by_name && by_proj)  MMQ_RULE(mmq_proj_only);
 				else                           MMQ_RULE(mmq_neither);
 			}
-			if (mmq_use_projection()) {
+			if (flag & MM_F_MAPQ_QUOTIENT) {
 				mmq_proj_t pb, pc;
 				mmq_project(mi, &regs[0], &pb);
 				mmq_project(mi, &regs[i], &pc);
@@ -647,7 +629,7 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 		regs0 = (mm_reg1_t*)realloc(regs0, sizeof(*regs0) * n_regs0);
 
 		int chrs_to_drop_count = n_regs0;
-		chrs_to_drop = collect_seed_chromosome_names(mi, n_regs0, regs0);
+		chrs_to_drop = collect_seed_chromosome_names(mi, n_regs0, regs0, opt->flag);
 
 		int z;
 		char* delete_name = "delete";
@@ -687,7 +669,7 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 			regs[i] = align_regs(opt, mi, b->km, qlens[i], seqs[i], &n_regs[i], regs[i], seg[i].a);
 
 			int chrs_to_drop_count = n_regs[i];
-			chrs_to_drop = collect_seed_chromosome_names(mi, n_regs[i], regs[i]);
+			chrs_to_drop = collect_seed_chromosome_names(mi, n_regs[i], regs[i], opt->flag);
 			
 			int z;
 			char* delete_name = "delete";

@@ -89,6 +89,8 @@ static ko_longopt_t long_options[] = {
 	{ "spsc0",          ko_required_argument, 364 },
 	{ "dbg-seed-occ",   ko_no_argument,       501 },
     { "vcf-file-with-variants",ko_required_argument, 700 },
+	{ "mapq-quotient", ko_no_argument,       701 },
+	{ "mapq-prefer-primary", ko_no_argument, 702 },
     { "parse-haplotype",ko_no_argument,       701 },
 	{ "help",           ko_no_argument,       'h' },
 	{ "max-intron-len", ko_required_argument, 'G' },
@@ -268,6 +270,8 @@ int main(int argc, char *argv[])
 		else if (c == 363) spsc_scale = atof(o.arg); // --spsc-scale
 		else if (c == 358 || c == 364) opt.junc_pen = atoi(o.arg); // --junc-pen or --spsc0
         else if (c == 700) vcf_with_variants = o.arg; // --vcf-file-with-variants
+		else if (c == 701) opt.flag |= MM_F_MAPQ_QUOTIENT; // --mapq-quotient
+		else if (c == 702) opt.flag |= MM_F_MAPQ_PREFER_T; // --mapq-prefer-primary
         else if (c == 701) ipt.flag |= MM_PARSE_HT;  // --parse-haplotype
 		else if (c == 330) {
 			fprintf(stderr, "[WARNING] \033[1;31m --lj-min-ratio has been deprecated.\033[0m\n");
@@ -373,6 +377,10 @@ int main(int argc, char *argv[])
 		fprintf(fp_help, "    -I NUM       split index for every ~NUM input bases [8G]\n");
 		fprintf(fp_help, "    -d FILE      dump index to FILE []\n");
 		fprintf(fp_help, "    --vcf-file-with-variants FILE      pass VCF FILE to modify index []\n");
+		fprintf(fp_help, "    --mapq-quotient    collapse candidate alignments by projection onto the\n");
+		fprintf(fp_help, "                       base reference instead of by sequence name\n");
+		fprintf(fp_help, "    --mapq-prefer-primary  on score ties keep the representative on the base\n");
+		fprintf(fp_help, "                       reference, so fewer reads need lift-over\n");
         fprintf(fp_help, "    --parse-haplotype parse haplotypes from VCF to generate real SNP combinations, otherwise use all.\n");
 		fprintf(fp_help, "  Mapping:\n");
 		fprintf(fp_help, "    -f FLOAT     filter out top FLOAT fraction of repetitive minimizers [%g]\n", opt.mid_occ_frac);
