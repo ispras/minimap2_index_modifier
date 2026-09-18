@@ -10,3 +10,4 @@ minimap2
 mappy.c
 *.venv
 *.vscode
+test/test_mm_lift
