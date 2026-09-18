@@ -7,6 +7,7 @@
 #include "kalloc.h"
 #include "sdust.h"
 #include "mmpriv.h"
+#include "mm_lift.h"
 #include "bseq.h"
 #include "khash.h"
 
@@ -667,6 +668,9 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 
 		mm_set_mapq2(b->km, n_regs0, regs0, opt->min_chain_score, opt->a, rep_len, is_sr || is_sr_rna, is_splice, chrs_to_drop);
 		free_chromosome_names(chrs_to_drop, chrs_to_drop_count);
+		/* project contig placements onto the base reference: after mapq, which
+		 * is scored on the candidate set as the aligner saw it. */
+		if ((opt->flag & MM_F_LIFT) && mi->lift) mm_lift_regs(mi, n_regs0, regs0);
 		n_regs[0] = n_regs0, regs[0] = regs0;
 	} else { // multi-segment
 		mm_seg_t *seg;
@@ -718,6 +722,11 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 			free_chromosome_names(chrs_to_drop, chrs_to_drop_count);
 		}
 		mm_seg_free(b->km, n_segs, seg);
+		/* project BEFORE pairing: a read on a contig and its mate on the
+		 * chromosome carry different rids until this runs, so mm_pair()
+		 * cannot relate them at all. */
+		if ((opt->flag & MM_F_LIFT) && mi->lift)
+			for (i = 0; i < n_segs; ++i) mm_lift_regs(mi, n_regs[i], regs[i]);
 		if (n_segs == 2 && opt->pe_ori >= 0 && (opt->flag&MM_F_CIGAR))
 			mm_pair(b->km, max_chain_gap_ref, opt->pe_bonus, opt->a * 2 + opt->b, opt->a, qlens, n_regs, regs); // pairing
 	}

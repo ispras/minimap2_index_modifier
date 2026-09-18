@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include "kalloc.h"
 #include "mmpriv.h"
+#include "mm_lift.h"
 
 static char mm_rg_id[256];
 
@@ -121,9 +122,15 @@ int mm_write_sam_hdr(const mm_idx_t *idx, const char *rg, const char *ver, int a
 	int ret = 0;
 	mm_sprintf_lite(&str, "@HD\tVN:1.6\tSO:unsorted\tGO:query\n");
 	if (idx) {
+		const mm_lift_t *lt = (const mm_lift_t*)idx->lift;
 		uint32_t i;
-		for (i = 0; i < idx->n_seq; ++i)
+		for (i = 0; i < idx->n_seq; ++i) {
+			/* when projecting, contigs never appear in the output, so they
+			 * must not appear in the header either -- a BAM naming an absent
+			 * @SQ is invalid. */
+			if (lt && (int32_t)i < lt->n && lt->a[i].base_rid >= 0) continue;
 			mm_sprintf_lite(&str, "@SQ\tSN:%s\tLN:%d\n", idx->seq[i].name, idx->seq[i].len);
+		}
 	}
 	if (rg) ret = sam_write_rg_line(&str, rg);
 	mm_sprintf_lite(&str, "@PG\tID:minimap2\tPN:minimap2");

@@ -88,6 +88,7 @@
  * ------------------------------------------------------------------------- */
 
 #include <stdint.h>
+#include "minimap.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -109,8 +110,8 @@ typedef struct {
 	int64_t off_a;     /* 0-based base-reference coordinate of contig offset 0 */
 } mm_lift_rec_t;
 
-/* Projection table.  Owned by the index; n == mi->n_seq. */
-typedef struct {
+/* Projection table.  Owned by the index; n == mi->n_seq, indexed by rid. */
+typedef struct mm_lift_s {
 	int32_t n;
 	mm_lift_rec_t *a;
 } mm_lift_t;
@@ -122,6 +123,20 @@ typedef struct {
 static inline int64_t mm_lift_off_b(const mm_lift_rec_t *rec)
 {
 	return rec->off_a + rec->del_len - rec->ins_len;
+}
+
+/* Reference-consuming span of a packed CIGAR (M/D/N/=/X).  Used to recompute
+ * mm_reg1_t::re after the splice, so that re always equals rs + span and the
+ * two cannot drift. */
+static inline int64_t mm_lift_ref_span(const uint32_t *cigar, int32_t n)
+{
+	int64_t s = 0; int32_t i;
+	for (i = 0; i < n; ++i) {
+		int op = cigar[i] & 0xf;
+		if (op == 0 || op == 2 || op == 3 || op == 7 || op == 8)
+			s += cigar[i] >> 4;
+	}
+	return s;
 }
 
 /* Zone of a contig offset.  0 = block A, 1 = the novel-ALT gap, 2 = block B. */
@@ -226,6 +241,54 @@ int mm_lift_cigar(const mm_lift_rec_t *rec, int32_t ctg_len,
                   int32_t qs, int32_t qe,
                   int64_t *rs_out, int32_t *qs_out, int32_t *qe_out,
                   uint32_t *cigar_out, int32_t cap, int32_t *n_out);
+
+/* ---------------------------------------------------------------------------
+ * Table construction.
+ *
+ * mm_lift_build(mi, fn_map, jct) fills mi->lift with one record per sequence.
+ *
+ *   - A sequence whose name does not parse as "<chrom>_contig_<pos>" gets
+ *     base_rid = -1 (identity).
+ *   - A contig whose chromosome prefix does not name a sequence in the index
+ *     also gets base_rid = -1, and is counted as unresolved: it cannot be
+ *     projected, so it is left alone rather than projected wrongly.
+ *   - off_a = pos - jct, jct as given (101 for this reference build).
+ *   - ins_len/del_len come from the signed delta d = |ALT| - |REF|:
+ *       d > 0 -> ins_len = d,  del_len = 0
+ *       d < 0 -> ins_len = 0,  del_len = -d
+ *     d is read from fn_map, a two-column "<contig name>\t<d>" TSV.  For a
+ *     contig absent from the file, d is inferred as len-201 when that is >= 4
+ *     (an insertion, since the generator requires |ALT| >= 5 and |REF| == 1);
+ *     otherwise the contig is unresolved.  See the metadata audit above for
+ *     why inference alone is not enough: every deletion contig needs the file.
+ *
+ * Returns the number of sequences with base_rid >= 0, or -1 on error.
+ * Writes the unresolved count to *n_unresolved when that is non-NULL.
+ * ------------------------------------------------------------------------- */
+int mm_lift_build(mm_idx_t *mi, const char *fn_map, int32_t jct, int64_t *n_unresolved);
+
+void mm_lift_destroy(mm_lift_t *lt);
+
+/* ---------------------------------------------------------------------------
+ * Project a whole candidate set in place.
+ *
+ * For every reg whose rid carries a projection record, rewrites rid, rs, re,
+ * qs, qe and the CIGAR in r->p, and sets r->lifted.  Regs on base sequences
+ * and regs whose projection fails are left exactly as they were, so the
+ * function is safe to call unconditionally.
+ *
+ * Must be called AFTER mapping quality is set -- mapq depends on the candidate
+ * set as the aligner scored it, and after projection the name-based rule in
+ * collect_seed_chromosome_names() can no longer tell a contig from a
+ * chromosome (every reg is on a chromosome by then).  Read r->lifted instead.
+ *
+ * Must be called BEFORE mm_pair(), so that a read on a contig and its mate on
+ * the chromosome can be judged a proper pair: before projection they carry
+ * different rids and mm_pair() cannot relate them at all.
+ *
+ * Returns the number of regs actually projected.
+ * ------------------------------------------------------------------------- */
+int mm_lift_regs(const mm_idx_t *mi, int n_regs, mm_reg1_t *regs);
 
 #ifdef __cplusplus
 }

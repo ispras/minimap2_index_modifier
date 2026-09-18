@@ -50,6 +50,7 @@
 #define MM_F_OUT_JUNC      (0x10000000000LL)
 #define MM_F_MAPQ_QUOTIENT (0x20000000000LL) // collapse candidates by projection onto the base reference
 #define MM_F_MAPQ_PREFER_T (0x40000000000LL) // on score ties keep the representative that lies on the base reference
+#define MM_F_LIFT          (0x80000000000LL) // project augmentation-contig placements onto the base reference before output
 
 #define MM_I_HPC          0x1
 #define MM_I_NO_SEQ       0x2
@@ -99,6 +100,7 @@ typedef struct {
 	struct mm_idx_intv_s *I;   // intervals (hidden)
 	struct mm_idx_spsc_s *spsc;// splice score (hidden)
 	struct mm_idx_jjump_s *J;  // junctions to create jumps (hidden)
+	struct mm_lift_s *lift;    // contig->base-reference projection table; NULL unless --lift
 	void *km, *h;
 } mm_idx_t;
 
@@ -123,7 +125,7 @@ typedef struct {
 	int32_t mlen, blen;     // seeded exact match length; seeded alignment block length
 	int32_t n_sub;          // number of suboptimal mappings
 	int32_t score0;         // initial chaining score (before chain merging/spliting)
-	uint32_t mapq:8, split:2, rev:1, inv:1, sam_pri:1, proper_frag:1, pe_thru:1, seg_split:1, seg_id:8, split_inv:1, is_alt:1, strand_retained:1, is_spliced:1, dummy:4;
+	uint32_t mapq:8, split:2, rev:1, inv:1, sam_pri:1, proper_frag:1, pe_thru:1, seg_split:1, seg_id:8, split_inv:1, is_alt:1, strand_retained:1, is_spliced:1, lifted:1, dummy:3;
 	uint32_t hash;
 	float div;
 	mm_extra_t *p;

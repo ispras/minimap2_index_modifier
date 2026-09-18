@@ -5,6 +5,7 @@
 #include "bseq.h"
 #include "minimap.h"
 #include "mmpriv.h"
+#include "mm_lift.h"
 #include "ketopt.h"
 
 #ifdef __linux__
@@ -91,6 +92,9 @@ static ko_longopt_t long_options[] = {
     { "vcf-file-with-variants",ko_required_argument, 700 },
 	{ "mapq-quotient", ko_no_argument,       710 },
 	{ "mapq-prefer-primary", ko_no_argument, 711 },
+	{ "lift",           ko_no_argument,       712 },
+	{ "lift-map",       ko_required_argument, 713 },
+	{ "lift-junction",  ko_required_argument, 714 },
     { "parse-haplotype",ko_no_argument,       701 },
 	{ "help",           ko_no_argument,       'h' },
 	{ "max-intron-len", ko_required_argument, 'G' },
@@ -141,6 +145,8 @@ int main(int argc, char *argv[])
 	mm_idxopt_t ipt;
 	int i, c, n_threads = 3, n_parts, old_best_n = -1;
 	char *vcf_with_variants = 0;
+	char *fn_lift_map = 0;
+	int lift_jct = 101;
 	float spsc_scale = 0.7f;
 	char *fnw = 0, *rg = 0, *fn_bed_junc = 0, *fn_bed_jump = 0, *fn_bed_pass1 = 0, *fn_spsc = 0, *s, *alt_list = 0;
 	FILE *fp_help = stderr;
@@ -272,6 +278,9 @@ int main(int argc, char *argv[])
         else if (c == 700) vcf_with_variants = o.arg; // --vcf-file-with-variants
 		else if (c == 710) opt.flag |= MM_F_MAPQ_QUOTIENT; // --mapq-quotient
 		else if (c == 711) opt.flag |= MM_F_MAPQ_PREFER_T; // --mapq-prefer-primary
+		else if (c == 712) opt.flag |= MM_F_LIFT; // --lift
+		else if (c == 713) fn_lift_map = o.arg; // --lift-map
+		else if (c == 714) lift_jct = atoi(o.arg); // --lift-junction
         else if (c == 701) ipt.flag |= MM_PARSE_HT;  // --parse-haplotype
 		else if (c == 330) {
 			fprintf(stderr, "[WARNING] \033[1;31m --lj-min-ratio has been deprecated.\033[0m\n");
@@ -377,6 +386,9 @@ int main(int argc, char *argv[])
 		fprintf(fp_help, "    -I NUM       split index for every ~NUM input bases [8G]\n");
 		fprintf(fp_help, "    -d FILE      dump index to FILE []\n");
 		fprintf(fp_help, "    --vcf-file-with-variants FILE      pass VCF FILE to modify index []\n");
+		fprintf(fp_help, "    --lift             emit base-reference coordinates for augmentation-contig\n");
+		fprintf(fp_help, "                       placements (no external liftover)\n");
+		fprintf(fp_help, "    --lift-map FILE    TSV of <contig name>\\t<|ALT|-|REF|> for --lift\n");
 		fprintf(fp_help, "    --mapq-quotient    collapse candidate alignments by projection onto the\n");
 		fprintf(fp_help, "                       base reference instead of by sequence name\n");
 		fprintf(fp_help, "    --mapq-prefer-primary  on score ties keep the representative on the base\n");
@@ -451,6 +463,17 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "[WARNING]\033[1;31m `-N 0' reduces alignment accuracy. Please use --secondary=no to suppress secondary alignments.\033[0m\n");
 	while ((mi = mm_idx_reader_read(idx_rdr, n_threads, vcf_with_variants)) != 0) {
 		int ret;
+		if (opt.flag & MM_F_LIFT) {
+			int64_t n_unres = 0;
+			int n_lift = mm_lift_build(mi, fn_lift_map, lift_jct, &n_unres);
+			if (n_lift < 0) {
+				fprintf(stderr, "[ERROR] --lift: could not build the projection table\n");
+				mm_idx_destroy(mi); mm_idx_reader_close(idx_rdr); return 1;
+			}
+			if (mm_verbose >= 3)
+				fprintf(stderr, "[M::%s] --lift: %d of %u sequences projectable, %ld unresolved\n",
+						__func__, n_lift, mi->n_seq, (long)n_unres);
+		}
 		if ((opt.flag & MM_F_CIGAR) && (mi->flag & MM_I_NO_SEQ)) {
 			fprintf(stderr, "[ERROR] the prebuilt index doesn't contain sequences.\n");
 			mm_idx_destroy(mi);
