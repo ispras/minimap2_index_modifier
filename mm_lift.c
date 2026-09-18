@@ -93,7 +93,7 @@ static void cb_push(cig_buf_t *b, int32_t len, int op)
 
 int mm_lift_cigar(const mm_lift_rec_t *rec, int32_t ctg_len,
                   int64_t rs, const uint32_t *cigar, int32_t n_cigar,
-                  int32_t qs, int32_t qe,
+                  int32_t qs, int32_t qe, int rev,
                   int64_t *rs_out, int32_t *qs_out, int32_t *qe_out,
                   uint32_t *cigar_out, int32_t cap, int32_t *n_out)
 {
@@ -212,8 +212,15 @@ int mm_lift_cigar(const mm_lift_rec_t *rec, int32_t ctg_len,
 	if (b.over) return -1;
 
 	*rs_out = first_ref;
-	*qs_out = qs + lead_clip;
-	*qe_out = qe - tail_clip;
+	/* lead_clip/tail_clip are in CIGAR (reference) order; qs/qe are in
+	 * forward-read order.  For a reverse alignment the two are mirrored. */
+	if (!rev) {
+		*qs_out = qs + lead_clip;
+		*qe_out = qe - tail_clip;
+	} else {
+		*qs_out = qs + tail_clip;
+		*qe_out = qe - lead_clip;
+	}
 	(void)ref_span;
 	return 0;
 }

@@ -120,14 +120,14 @@ static void t2_insertion(void)
 
 	/* entirely inside block A: pure shift, no surgery */
 	in[0] = CIG_MK(50, OP_M);
-	rc = mm_lift_cigar(&INS, 205, 0, in, 1, 0, 50, &rso, &qso, &qeo, out, 16, &n_out);
+	rc = mm_lift_cigar(&INS, 205, 0, in, 1, 0, 50, 0, &rso, &qso, &qeo, out, 16, &n_out);
 	expect_int("block A rc", rc, 0);
 	expect_cigar("block A cigar", out, n_out, "50M");
 	expect_i64("block A rs", rso, 30783);
 
 	/* entirely inside block B: shift by off_b = off_a - ins_len = 30779 */
 	in[0] = CIG_MK(100, OP_M);
-	rc = mm_lift_cigar(&INS, 205, 105, in, 1, 0, 100, &rso, &qso, &qeo, out, 16, &n_out);
+	rc = mm_lift_cigar(&INS, 205, 105, in, 1, 0, 100, 0, &rso, &qso, &qeo, out, 16, &n_out);
 	expect_int("block B rc", rc, 0);
 	expect_cigar("block B cigar", out, n_out, "100M");
 	expect_i64("block B rs", rso, 30884);   /* off_b 30779 + 105 */
@@ -137,7 +137,7 @@ static void t2_insertion(void)
 	 * block B.  The 4 novel bases have no base-reference counterpart, so they
 	 * must become an insertion -- NOT a deletion, and not silently dropped. */
 	in[0] = CIG_MK(150, OP_M);
-	rc = mm_lift_cigar(&INS, 205, 51, in, 1, 0, 150, &rso, &qso, &qeo, out, 16, &n_out);
+	rc = mm_lift_cigar(&INS, 205, 51, in, 1, 0, 150, 0, &rso, &qso, &qeo, out, 16, &n_out);
 	expect_int("junction rc", rc, 0);
 	expect_cigar("junction cigar", out, n_out, "50M4I96M");
 	expect_i64("junction rs", rso, 30834);        /* off_a 30783 + 51 */
@@ -148,14 +148,14 @@ static void t2_insertion(void)
 
 	/* read that stops exactly at the junction: no insertion, no deletion */
 	in[0] = CIG_MK(50, OP_M);
-	rc = mm_lift_cigar(&INS, 205, 51, in, 1, 0, 50, &rso, &qso, &qeo, out, 16, &n_out);
+	rc = mm_lift_cigar(&INS, 205, 51, in, 1, 0, 50, 0, &rso, &qso, &qeo, out, 16, &n_out);
 	expect_int("stops at junction rc", rc, 0);
 	expect_cigar("stops at junction cigar", out, n_out, "50M");
 
 	/* read starting inside the novel ALT bases: those query bases cannot be
 	 * placed, so they become clipping and qs moves */
 	in[0] = CIG_MK(98, OP_M);           /* contig [103, 201) = 2 novel + 96 B */
-	rc = mm_lift_cigar(&INS, 205, 103, in, 1, 0, 98, &rso, &qso, &qeo, out, 16, &n_out);
+	rc = mm_lift_cigar(&INS, 205, 103, in, 1, 0, 98, 0, &rso, &qso, &qeo, out, 16, &n_out);
 	expect_int("starts in gap rc", rc, 0);
 	expect_cigar("starts in gap cigar", out, n_out, "96M");
 	expect_i64("starts in gap rs", rso, 30884);
@@ -173,14 +173,14 @@ static void t3_deletion(void)
 
 	/* entirely inside block A: no deletion invented */
 	in[0] = CIG_MK(50, OP_M);
-	rc = mm_lift_cigar(&DEL, 201, 0, in, 1, 0, 50, &rso, &qso, &qeo, out, 16, &n_out);
+	rc = mm_lift_cigar(&DEL, 201, 0, in, 1, 0, 50, 0, &rso, &qso, &qeo, out, 16, &n_out);
 	expect_int("block A rc", rc, 0);
 	expect_cigar("block A cigar (no D)", out, n_out, "50M");
 	expect_i64("block A rs", rso, 54649);
 
 	/* entirely inside block B: shifted, still no deletion */
 	in[0] = CIG_MK(100, OP_M);
-	rc = mm_lift_cigar(&DEL, 201, 101, in, 1, 0, 100, &rso, &qso, &qeo, out, 16, &n_out);
+	rc = mm_lift_cigar(&DEL, 201, 101, in, 1, 0, 100, 0, &rso, &qso, &qeo, out, 16, &n_out);
 	expect_int("block B rc", rc, 0);
 	expect_cigar("block B cigar (no D)", out, n_out, "100M");
 	expect_i64("block B rs", rso, 54754);   /* off_b 54653 + 101 */
@@ -192,7 +192,7 @@ static void t3_deletion(void)
 	 * produces here, and it is correct; the measured pathology is the same
 	 * op emitted when the contig sequence did NOT omit the bases. */
 	in[0] = CIG_MK(150, OP_M);
-	rc = mm_lift_cigar(&DEL, 201, 51, in, 1, 0, 150, &rso, &qso, &qeo, out, 16, &n_out);
+	rc = mm_lift_cigar(&DEL, 201, 51, in, 1, 0, 150, 0, &rso, &qso, &qeo, out, 16, &n_out);
 	expect_int("junction rc", rc, 0);
 	expect_cigar("junction cigar", out, n_out, "50M4D100M");
 	expect_i64("junction rs", rso, 54700);  /* off_a 54649 + 51 */
@@ -201,20 +201,20 @@ static void t3_deletion(void)
 	/* G5, the anti-pathology test: a read that does NOT cross the junction
 	 * must never receive the deletion, however close it sits. */
 	in[0] = CIG_MK(51, OP_M);           /* contig [50, 101), ends AT the junction */
-	rc = mm_lift_cigar(&DEL, 201, 50, in, 1, 0, 51, &rso, &qso, &qeo, out, 16, &n_out);
+	rc = mm_lift_cigar(&DEL, 201, 50, in, 1, 0, 51, 0, &rso, &qso, &qeo, out, 16, &n_out);
 	expect_int("abuts junction rc", rc, 0);
 	expect_cigar("abuts junction: no D", out, n_out, "51M");
 	expect_i64("abuts junction rs", rso, 54699);
 
 	in[0] = CIG_MK(50, OP_M);           /* contig [101, 151), starts AT it */
-	rc = mm_lift_cigar(&DEL, 201, 101, in, 1, 0, 50, &rso, &qso, &qeo, out, 16, &n_out);
+	rc = mm_lift_cigar(&DEL, 201, 101, in, 1, 0, 50, 0, &rso, &qso, &qeo, out, 16, &n_out);
 	expect_int("starts at junction rc", rc, 0);
 	expect_cigar("starts at junction: no D", out, n_out, "50M");
 	expect_i64("starts at junction rs", rso, 54754);
 
 	/* the deletion op appears exactly once even for a long span */
 	in[0] = CIG_MK(200, OP_M);
-	rc = mm_lift_cigar(&DEL, 201, 0, in, 1, 0, 200, &rso, &qso, &qeo, out, 16, &n_out);
+	rc = mm_lift_cigar(&DEL, 201, 0, in, 1, 0, 200, 0, &rso, &qso, &qeo, out, 16, &n_out);
 	expect_int("full contig rc", rc, 0);
 	expect_cigar("full contig cigar", out, n_out, "101M4D99M");
 }
@@ -230,7 +230,7 @@ static void t4_existing_indels(void)
 	/* read with its own 3 bp insertion before a deletion junction */
 	in[0] = CIG_MK(30, OP_M); in[1] = CIG_MK(3, OP_I); in[2] = CIG_MK(117, OP_M);
 	/* contig [51, 198): 50 in A, 97 in B */
-	rc = mm_lift_cigar(&DEL, 201, 51, in, 3, 0, 150, &rso, &qso, &qeo, out, 16, &n_out);
+	rc = mm_lift_cigar(&DEL, 201, 51, in, 3, 0, 150, 0, &rso, &qso, &qeo, out, 16, &n_out);
 	expect_int("own I then junction rc", rc, 0);
 	expect_cigar("own I then junction", out, n_out, "30M3I20M4D97M");
 	expect_i64("own I then junction rs", rso, 54700);
@@ -240,7 +240,7 @@ static void t4_existing_indels(void)
 	in[0] = CIG_MK(40, OP_M); in[1] = CIG_MK(11, OP_D); in[2] = CIG_MK(110, OP_M);
 	/* contig [50, 211) -> A [50,101)=51 ... but 40M takes [50,90), 11D [90,101),
 	 * then 110M from 101 in B */
-	rc = mm_lift_cigar(&DEL, 201, 50, in, 3, 0, 150, &rso, &qso, &qeo, out, 16, &n_out);
+	rc = mm_lift_cigar(&DEL, 201, 50, in, 3, 0, 150, 0, &rso, &qso, &qeo, out, 16, &n_out);
 	expect_int("own D abutting junction rc", rc, 0);
 	expect_cigar("own D merges with junction D", out, n_out, "40M15D110M");
 
@@ -249,7 +249,7 @@ static void t4_existing_indels(void)
 	 * so the op must vanish entirely, not become a base-reference deletion */
 	in[0] = CIG_MK(50, OP_M); in[1] = CIG_MK(4, OP_D); in[2] = CIG_MK(96, OP_M);
 	/* contig [51,101) A, [101,105) the gap, [105,201) B */
-	rc = mm_lift_cigar(&INS, 205, 51, in, 3, 0, 146, &rso, &qso, &qeo, out, 16, &n_out);
+	rc = mm_lift_cigar(&INS, 205, 51, in, 3, 0, 146, 0, &rso, &qso, &qeo, out, 16, &n_out);
 	expect_int("D inside gap rc", rc, 0);
 	expect_cigar("D inside gap vanishes", out, n_out, "146M");
 	expect_i64("D inside gap rs", rso, 30834);
@@ -270,13 +270,13 @@ static void t5_edges(void)
 	{
 		mm_lift_rec_t big = { 0, 101, 120, 0, 1000 };
 		in[0] = CIG_MK(50, OP_M);
-		rc = mm_lift_cigar(&big, 321, 130, in, 1, 0, 50, &rso, &qso, &qeo, out, 16, &n_out);
+		rc = mm_lift_cigar(&big, 321, 130, in, 1, 0, 50, 0, &rso, &qso, &qeo, out, 16, &n_out);
 		expect_int("wholly in gap -> -2", rc, -2);
 	}
 
 	/* capacity too small -> -1 and the required op count */
 	in[0] = CIG_MK(150, OP_M);
-	rc = mm_lift_cigar(&INS, 205, 51, in, 1, 0, 150, &rso, &qso, &qeo, out, 1, &n_out);
+	rc = mm_lift_cigar(&INS, 205, 51, in, 1, 0, 150, 0, &rso, &qso, &qeo, out, 1, &n_out);
 	expect_int("too small -> -1", rc, -1);
 	expect_int("required op count", n_out, 3);
 
@@ -285,7 +285,7 @@ static void t5_edges(void)
 	{
 		mm_lift_rec_t flat = { 0, 101, 0, 0, 500 };
 		in[0] = CIG_MK(150, OP_M);
-		rc = mm_lift_cigar(&flat, 201, 10, in, 1, 0, 150, &rso, &qso, &qeo, out, 16, &n_out);
+		rc = mm_lift_cigar(&flat, 201, 10, in, 1, 0, 150, 0, &rso, &qso, &qeo, out, 16, &n_out);
 		expect_int("flat rc", rc, 0);
 		expect_cigar("flat cigar", out, n_out, "150M");
 		expect_i64("flat rs", rso, 510);
@@ -378,6 +378,58 @@ static void t6_against_real_chain(void)
 	       n_blockB_bad, n_rec);
 }
 
+
+/* ---- test 7: reverse-strand clip orientation -------------------------------
+ * Regression for a defect found by code review, not by any length check.
+ * mm_lift_cigar() reports clipping in CIGAR (reference) order, but qs/qe live
+ * in forward-read order.  write_sam_cigar() prints clip_len[0] before the
+ * CIGAR and computes it as (rev ? qlen-qe : qs) -- format.c:490-491 -- so for
+ * a reverse alignment the leading clip must come out of qe, not qs.
+ *
+ * Applying it to the wrong end still leaves
+ *     clip_len[0] + cigar_query + clip_len[1] == qlen,
+ * so gate G4 (CIGAR query length equals SEQ length) passes either way.  Only
+ * this test distinguishes them.
+ * ------------------------------------------------------------------------ */
+static void t7_reverse_clip(void)
+{
+	uint32_t in[4], out[16];
+	int32_t n_out, qso_f, qeo_f, qso_r, qeo_r;
+	int64_t rso;
+	int rc;
+	puts("[7] reverse-strand clip lands on the other end");
+
+	/* 98 bp alignment starting at contig offset 103, i.e. 2 bases inside the
+	 * 4 novel ALT bases of chr1_contig_30884.  Those 2 query bases cannot be
+	 * placed and become clipping. */
+	in[0] = CIG_MK(98, OP_M);
+
+	rc = mm_lift_cigar(&INS, 205, 103, in, 1, 0, 98, 0,
+	                   &rso, &qso_f, &qeo_f, out, 16, &n_out);
+	expect_int("forward rc", rc, 0);
+	expect_cigar("forward cigar", out, n_out, "96M");
+	expect_int("forward qs advances by 2", qso_f, 2);
+	expect_int("forward qe unchanged", qeo_f, 98);
+
+	rc = mm_lift_cigar(&INS, 205, 103, in, 1, 0, 98, 1,
+	                   &rso, &qso_r, &qeo_r, out, 16, &n_out);
+	expect_int("reverse rc", rc, 0);
+	expect_cigar("reverse cigar", out, n_out, "96M");
+	expect_int("reverse qs unchanged", qso_r, 0);
+	expect_int("reverse qe retreats by 2", qeo_r, 96);
+
+	/* both orientations keep the query length, which is exactly why a length
+	 * check cannot tell them apart */
+	expect_int("forward query span", qeo_f - qso_f, 96);
+	expect_int("reverse query span", qeo_r - qso_r, 96);
+	/* ...but they are genuinely different placements */
+	++checks;
+	if (qso_f == qso_r && qeo_f == qeo_r) {
+		printf("  FAIL reverse orientation is not distinguished from forward\n");
+		++fails;
+	}
+}
+
 int main(void)
 {
 	puts("mm_lift unit tests");
@@ -388,6 +440,7 @@ int main(void)
 	t4_existing_indels();
 	t5_edges();
 	t6_against_real_chain();
+	t7_reverse_clip();
 	printf("\n%d checks, %d failures\n", checks, fails);
 	return fails ? 1 : 0;
 }

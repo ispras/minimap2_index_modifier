@@ -150,7 +150,7 @@ int mm_lift_regs(const mm_idx_t *mi, int n_regs, mm_reg1_t *regs)
 
 		rc = mm_lift_cigar(rec, (int32_t)mi->seq[r->rid].len,
 		                   r->rs, r->p->cigar, (int32_t)r->p->n_cigar,
-		                   r->qs, r->qe,
+		                   r->qs, r->qe, r->rev,
 		                   &rs_out, &qs_out, &qe_out, buf, cap, &n_out);
 		if (rc == 0) {
 			/* grow r->p if needed; same accounting as align.c:313-316 --

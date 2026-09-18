@@ -199,6 +199,14 @@ int64_t mm_lift_pos(const mm_lift_rec_t *rec, int64_t c);
  *                   minimap2 keeps clipping outside r->p->cigar and synthesises
  *                   it in write_sam_cigar() (format.c:489-491) from r->qs/r->qe.
  *   qs, qe     query interval of the alignment (mm_reg1_t::qs/qe)
+ *   rev        mm_reg1_t::rev.  Needed because the CIGAR is written in
+ *              REFERENCE order while qs/qe are in FORWARD-READ order, so for a
+ *              reverse alignment the clipping that precedes the CIGAR sits at
+ *              the 3' end of the forward read.  write_sam_cigar() encodes the
+ *              same asymmetry: clip_len[0] = rev ? qlen-qe : qs
+ *              (format.c:490-491).  Getting this backwards still satisfies
+ *              "CIGAR query length == SEQ length", so no length check can
+ *              catch it -- only the side the soft clip lands on is wrong.
  *
  * Output (all written only on success):
  *   *rs_out        0-based base-reference start
@@ -238,7 +246,7 @@ int64_t mm_lift_pos(const mm_lift_rec_t *rec, int64_t c);
  * ------------------------------------------------------------------------- */
 int mm_lift_cigar(const mm_lift_rec_t *rec, int32_t ctg_len,
                   int64_t rs, const uint32_t *cigar, int32_t n_cigar,
-                  int32_t qs, int32_t qe,
+                  int32_t qs, int32_t qe, int rev,
                   int64_t *rs_out, int32_t *qs_out, int32_t *qe_out,
                   uint32_t *cigar_out, int32_t cap, int32_t *n_out);
 
