@@ -380,7 +380,7 @@ static void *worker_pipeline(void *shared, int step, void *in)
 	    vcf_ctx_t ctx = {0}; /* must be zeroed: vcf_close_synced() below runs unconditionally */
         if (p->vcf_with_variants && strcmp(p->vcf_with_variants, "") && vcf_open_synced(p->vcf_with_variants, 4, &ctx) != 0) {
 	        fprintf(stderr, "ERROR: failed to open %s with index\n", p->vcf_with_variants);
-	        return NULL;
+	        exit(1); /* was: return NULL -- the pipeline then wrote an index with 0 minimizers and exited 0 */
 	    }
 
 		for (i = 0; i < s->n_seq; ++i) {

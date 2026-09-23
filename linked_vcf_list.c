@@ -96,6 +96,13 @@ void calculate_haplotypes(mm_idx_t * mi, bcf_hdr_t *hdr, struct node *window_sta
 	    if (snp_num > MAX_SNP) return;
         }
 	//printf("snpnum: %d\n", snp_num);
+        /* snp_num == 0 (no variant in the window): arr_i = 2^0 = 1, arr_j = 1, a one-byte
+         * calloc, and the loop below starts at j = 1 << (snp_num - 1) = 1 << -1 (undefined
+         * behaviour; on x86 j becomes 2^31 and the loop writes 32 bytes into the 1-byte
+         * buffer -- heap overflow, segfault at -O2 on chr21+contigs).  The pass does no work
+         * anyway: the haplotype loop below never runs and add_variants is never called.
+         * Same guard as the index-builder of the battle index (gen6/mm2src, "ref2"). */
+        if (snp_num == 0) return;
         arr_i = (int) pow(2, snp_num);
         arr_j = snp_num + 1;
         gt_array = (char *) calloc(arr_i * arr_j, sizeof(char));
