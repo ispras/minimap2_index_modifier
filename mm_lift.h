@@ -288,14 +288,25 @@ void mm_lift_destroy(mm_lift_t *lt);
  * and regs whose projection fails are left exactly as they were, so the
  * function is safe to call unconditionally.
  *
- * Must be called AFTER mapping quality is set -- mapq depends on the candidate
- * set as the aligner scored it, and after projection the name-based rule in
- * collect_seed_chromosome_names() can no longer tell a contig from a
- * chromosome (every reg is on a chromosome by then).  Read r->lifted instead.
+ * Must be called BEFORE the locus rule and mapq (map.c: mmq_rule_and_mapq):
+ * the rule "same locus = one hypothesis" compares exact projected coordinates
+ * (mm_lift_same_locus), and after projection the name-based rule can no
+ * longer tell a contig from a chromosome -- it reads r->lifted instead.
+ * Scores (dp_score/dp_max) are coordinate-free and are not touched here, so
+ * projecting first changes nothing about how the candidates were scored.
  *
- * Must be called BEFORE mm_pair(), so that a read on a contig and its mate on
- * the chromosome can be judged a proper pair: before projection they carry
- * different rids and mm_pair() cannot relate them at all.
+ * Must be called BEFORE mm_pair() and before --mate-resolve, so that a read on
+ * a contig and its mate on the chromosome can be judged a proper pair: before
+ * projection they carry different rids and mm_pair() cannot relate them.
+ *
+ * After this, map.c calls mm_lift_refresh() (align.c) on every lifted reg:
+ * the same indel left-shift the aligner applies to every alignment
+ * (mm_fix_cigar) is run against the BASE sequence, and mlen/blen/n_ambi are
+ * recounted so NM is an edit distance against the base.  Skipped only under
+ * --lift-noshift (rollback).
+ *
+ * Records where the reg sat before projection in r->lift_rid / r->lift_rs
+ * (emitted as lt:Z:<contig>,<pos1> in SAM).
  *
  * Returns the number of regs actually projected.
  * ------------------------------------------------------------------------- */
