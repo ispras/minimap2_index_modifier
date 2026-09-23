@@ -1045,6 +1045,73 @@ void mm_update_dp_max(int qlen, int n_regs, mm_reg1_t *regs, float frac, int a, 
 	}
 }
 
+/* After --lift has projected a contig placement onto the base reference, make
+ * the record look exactly as if the aligner had produced it there: run the
+ * same indel left-shift (mm_fix_cigar) against the BASE sequence and recount
+ * mlen/blen/n_ambi so NM is an edit distance against the base, not the
+ * contig.  The junction D/I emitted by mm_lift_cigar() is left-shifted like
+ * any other gap, which is what makes a contig-placed read and a base-placed
+ * read of the same allele agree on where the indel is (DESIGN.md class C3).
+ * dp_score/dp_max are NOT touched: they are the score of the ALT hypothesis,
+ * scored against the allele the read actually carries (DESIGN.md §4). */
+void mm_lift_refresh(const mm_idx_t *mi, int qlen, const char *qstr, mm_reg1_t *r)
+{
+	extern unsigned char seq_nt4_table[256];
+	uint8_t *qbuf, *tseq, *qseq;
+	int32_t i, qshift, tshift, l_q, l_t;
+	uint32_t k, l;
+	int32_t toff = 0, qoff = 0;
+	mm_extra_t *p = r->p;
+	if (p == NULL || p->n_cigar == 0) return;
+	l_q = r->qe - r->qs; l_t = r->re - r->rs;
+	if (l_q <= 0 || l_t <= 0) return;
+	qbuf = (uint8_t*)malloc((size_t)l_q + (size_t)l_t);
+	if (qbuf == NULL) return;
+	tseq = qbuf + l_q;
+	/* query in alignment orientation: for a reverse hit the aligned strand is
+	 * the reverse complement and r->qs/qe are forward-read coordinates
+	 * (align.c:894-895), so the aligned interval starts at qlen - qe */
+	if (!r->rev) {
+		for (i = 0; i < l_q; ++i) qbuf[i] = seq_nt4_table[(uint8_t)qstr[r->qs + i]];
+	} else {
+		for (i = 0; i < l_q; ++i) {
+			uint8_t c = seq_nt4_table[(uint8_t)qstr[r->qe - 1 - i]];
+			qbuf[i] = c < 4 ? 3 - c : 4;
+		}
+	}
+	mm_idx_getseq(mi, r->rid, r->rs, r->re, tseq);
+	qseq = qbuf;
+	mm_fix_cigar(r, qseq, tseq, &qshift, &tshift);
+	qseq += qshift, tseq += tshift;
+	r->blen = r->mlen = 0; p->n_ambi = 0;
+	for (k = 0; k < p->n_cigar; ++k) {
+		uint32_t op = p->cigar[k]&0xf, len = p->cigar[k]>>4;
+		if (op == MM_CIGAR_MATCH) {
+			int n_ambi = 0, n_diff = 0;
+			for (l = 0; l < len; ++l) {
+				int cq = qseq[qoff + l], ct = tseq[toff + l];
+				if (ct > 3 || cq > 3) ++n_ambi;
+				else if (ct != cq) ++n_diff;
+			}
+			r->blen += len - n_ambi, r->mlen += len - (n_ambi + n_diff), p->n_ambi += n_ambi;
+			toff += len, qoff += len;
+		} else if (op == MM_CIGAR_INS) {
+			int n_ambi = 0;
+			for (l = 0; l < len; ++l) if (qseq[qoff + l] > 3) ++n_ambi;
+			r->blen += len - n_ambi, p->n_ambi += n_ambi;
+			qoff += len;
+		} else if (op == MM_CIGAR_DEL) {
+			int n_ambi = 0;
+			for (l = 0; l < len; ++l) if (tseq[toff + l] > 3) ++n_ambi;
+			r->blen += len - n_ambi, p->n_ambi += n_ambi;
+			toff += len;
+		} else if (op == MM_CIGAR_N_SKIP) {
+			toff += len;
+		}
+	}
+	free(qbuf);
+}
+
 mm_reg1_t *mm_align_skeleton(void *km, const mm_mapopt_t *opt, const mm_idx_t *mi, int qlen, const char *qstr, int *n_regs_, mm_reg1_t *regs, mm128_t *a)
 {
 	extern unsigned char seq_nt4_table[256];

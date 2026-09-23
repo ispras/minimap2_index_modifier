@@ -8,6 +8,7 @@
 #include "sdust.h"
 #include "mmpriv.h"
 #include "mm_lift.h"
+#include <limits.h>
 #include "bseq.h"
 #include "khash.h"
 
@@ -281,6 +282,26 @@ static int mmq_equivalent(const mmq_proj_t *a, const mmq_proj_t *b)
 	return a->st <= b->en && b->st <= a->en;
 }
 
+/* Same-locus test on two candidates.  With --lift the candidates have already
+ * been projected exactly (mm_lift_regs runs BEFORE this rule), so the test is
+ * mm_lift_same_locus(): same sequence, same strand, a shared diagonal.  Without
+ * the projection table the old name-parsed upper bound is all there is. */
+static int mmq_same_locus(const mm_idx_t *mi, const mm_reg1_t *a, const mm_reg1_t *b)
+{
+	mmq_proj_t pa, pb;
+	if (mi->lift) return mm_lift_same_locus(a, b);
+	mmq_project(mi, a, &pa);
+	mmq_project(mi, b, &pb);
+	return mmq_equivalent(&pa, &pb);
+}
+
+/* "Came from a contig": the name before projection, the lifted bit after. */
+static int mmq_is_contig(const mm_idx_t *mi, const mm_reg1_t *r)
+{
+	if (mi->lift) return r->lifted;
+	return strstr(mi->seq[r->rid].name, "_contig_") != NULL;
+}
+
 
 /* Disagreement between the two rules, counted on whatever data is being mapped.
  * mmq_name_only is the case the paper cares about: the name rule discards a
@@ -311,16 +332,15 @@ static void mmq_prefer_t_representative(const mm_idx_t *mi, int n_a, mm_reg1_t *
 {
 	mmq_proj_t p0, pi;
 	int i;
+	(void)p0; (void)pi;
 	if (n_a < 2 || regs == NULL) return;
-	if (strstr(mi->seq[regs[0].rid].name, "_contig_") == NULL) return; /* already on T */
+	if (!mmq_is_contig(mi, &regs[0])) return; /* already on T */
 	if (regs[0].p == NULL) return;
-	mmq_project(mi, &regs[0], &p0);
 	for (i = 1; i < n_a; ++i) {
 		if (regs[i].p == NULL) continue;
-		if (strstr(mi->seq[regs[i].rid].name, "_contig_") != NULL) continue;
+		if (mmq_is_contig(mi, &regs[i])) continue;
 		if (regs[i].p->dp_score != regs[0].p->dp_score) continue;
-		mmq_project(mi, &regs[i], &pi);
-		if (!mmq_equivalent(&p0, &pi)) continue;
+		if (!mmq_same_locus(mi, &regs[0], &regs[i])) continue;
 		{
 			/* sam_pri, id and parent belong to the slot, not to the record:
 			 * slot 0 stays the primary, only the alignment itself moves. */
@@ -376,13 +396,10 @@ char **collect_seed_chromosome_names(const mm_idx_t *mi, int n_a, mm_reg1_t *reg
 			curr_copy = strdup(curr_name);
 
 			{	/* count how often the two rules disagree, whichever is in force */
-				mmq_proj_t qb, qc;
 				int by_name, by_proj;
-				mmq_project(mi, &regs[0], &qb);
-				mmq_project(mi, &regs[i], &qc);
-				by_proj = mmq_equivalent(&qb, &qc);
-				by_name = (strstr(curr_name, "contig") != NULL);
-				if (!by_name && strstr(best_alignment, "contig") != NULL) {
+				by_proj = mmq_same_locus(mi, &regs[0], &regs[i]);
+				by_name = mmq_is_contig(mi, &regs[i]);
+				if (!by_name && mmq_is_contig(mi, &regs[0])) {
 					char *b2 = strdup(best_alignment), *c2 = strdup(curr_name);
 					char *bt = strtok(b2, "_"), *ct = strtok(c2, "_");
 					by_name = (bt && ct && strcmp(bt, ct) == 0);
@@ -394,11 +411,9 @@ char **collect_seed_chromosome_names(const mm_idx_t *mi, int n_a, mm_reg1_t *reg
 				else                           MMQ_RULE(mmq_neither);
 			}
 			if (flag & MM_F_MAPQ_QUOTIENT) {
-				mmq_proj_t pb, pc;
-				mmq_project(mi, &regs[0], &pb);
-				mmq_project(mi, &regs[i], &pc);
-				/* collapse only candidates that project onto the same locus */
-				if (mmq_equivalent(&pb, &pc))
+				/* collapse only candidates that are the same locus as the best:
+				 * symmetric -- it does not matter which of the two is the contig */
+				if (mmq_same_locus(mi, &regs[0], &regs[i]))
 					chromosome_names[i] = strdup(delete_name);
 			} else {
 			if (strstr(curr_name, "contig") != NULL) {
@@ -520,6 +535,99 @@ mm_reg1_t* remove_second_suboptimal_alignment(mm_reg1_t *regs, int *num_regs, in
 	return regs;
 }
 
+/* The fork's per-segment sequence: locus rule -> drop collapsed candidates ->
+ * refresh dp_max2/subsc (and n_sub when asked) -> mapq.  Factored out so the
+ * mate step can re-run it on a pruned candidate set. */
+static mm_reg1_t *mmq_rule_and_mapq(const mm_idx_t *mi, const mm_mapopt_t *opt, void *km, int *n_regs_, mm_reg1_t *regs,
+                                    int rep_len, int is_sr, int is_sr_rna, int is_splice, int recompute_nsub, int apply_rule)
+{
+	int n_regs = *n_regs_, z, n_names = n_regs;
+	char **chrs_to_drop = NULL;
+	const char *delete_name = "delete";
+	if (apply_rule) {
+		chrs_to_drop = collect_seed_chromosome_names(mi, n_regs, regs, opt->flag);
+		for (z = n_regs - 1; z > 0; z--)
+			if (chrs_to_drop[z] != NULL && strcmp(chrs_to_drop[z], delete_name) == 0)
+				regs = remove_second_suboptimal_alignment(regs, &n_regs, z, opt->a * 2 + opt->b);
+	}
+	if (n_regs > 0) {
+		int max_dpmax2 = 0, max_score = 0;
+		for (z = 1; z < n_regs; z++) {
+			regs[z].id = z;
+			if (regs[z].p->dp_score > max_dpmax2) max_dpmax2 = regs[z].p->dp_score;
+			if (regs[z].score > max_score) max_score = regs[z].score;
+		}
+		if (regs[0].p != NULL) regs[0].p->dp_max2 = max_dpmax2;
+		regs[0].subsc = max_score;
+		if (recompute_nsub) {
+			mm_reg1_t *copy = (mm_reg1_t*)malloc(n_regs * sizeof(mm_reg1_t));
+			memcpy(copy, regs, n_regs * sizeof(mm_reg1_t));
+			copy[0].n_sub = 0;
+			mm_set_parent(km, opt->mask_level, opt->mask_len, n_regs, copy, opt->a * 2 + opt->b, opt->flag&MM_F_HARD_MLEVEL, opt->alt_drop);
+			regs[0].n_sub = copy[0].n_sub;
+			free(copy);
+		}
+	}
+	mm_set_mapq2(km, n_regs, regs, opt->min_chain_score, opt->a, rep_len, is_sr || is_sr_rna, is_splice, chrs_to_drop);
+	if (chrs_to_drop) free_chromosome_names(chrs_to_drop, n_names);
+	*n_regs_ = n_regs;
+	return regs;
+}
+
+/* A candidate c is compatible with the (unambiguous) mate m when both lie on
+ * one sequence, on opposite strands (FR), and the fragment they imply is no
+ * longer than max_frag_len.  Returns the implied fragment length, or -1. */
+static int mm_mate_compat(const mm_mapopt_t *opt, const mm_reg1_t *c, const mm_reg1_t *m)
+{
+	int lo, hi, span;
+	if (c->p == NULL || c->rid != m->rid || c->rev == m->rev) return -1;
+	{	/* FR: the forward end must not lie downstream of the reverse end */
+		const mm_reg1_t *f = c->rev ? m : c, *r = c->rev ? c : m;
+		if (f->rs > r->re) return -1;
+	}
+	lo = c->rs < m->rs ? c->rs : m->rs;
+	hi = c->re > m->re ? c->re : m->re;
+	span = hi - lo;
+	if (span > opt->max_frag_len) return -1;
+	return span;
+}
+
+/* --mate-resolve, BEFORE mapq is final and BEFORE mm_pair(): if exactly one
+ * end is unambiguous (standalone mapq >= opt->mate_mapq), the other end keeps
+ * only the candidate nearest to that mate and its mapq is recomputed on that
+ * set.  If both ends are ambiguous nothing is touched and the pair is marked
+ * (pa:i:1) so those cases can be pulled out and looked at.  Returns 1 when
+ * both ends were ambiguous. */
+static int mm_mate_resolve(const mm_idx_t *mi, const mm_mapopt_t *opt, void *km, int *n_regs, mm_reg1_t **regs,
+                           int rep_len, int is_sr, int is_sr_rna, int is_splice)
+{
+	int s, t, i, best = -1, best_span = INT32_MAX, n_compat = 0, unamb[2];
+	mm_reg1_t *anchor;
+	if (n_regs[0] == 0 || n_regs[1] == 0) return 0;
+	for (s = 0; s < 2; ++s) unamb[s] = regs[s][0].mapq >= opt->mate_mapq;
+	if (unamb[0] && unamb[1]) return 0;
+	if (!unamb[0] && !unamb[1]) return 1;
+	s = unamb[0] ? 1 : 0; t = 1 - s;
+	anchor = &regs[t][0];
+	for (i = 0; i < n_regs[s]; ++i) {
+		int span = mm_mate_compat(opt, &regs[s][i], anchor);
+		if (span < 0) continue;
+		++n_compat;
+		if (span < best_span) best_span = span, best = i;   /* ties: lower index = better score */
+	}
+	if (best < 0) return 0;   /* nothing compatible: leave it to mm_pair() as before */
+	/* drop everything but the nearest compatible candidate, highest index first */
+	for (i = n_regs[s] - 1; i >= 0 && n_regs[s] > 1; --i) {
+		if (i == best) continue;
+		regs[s] = remove_second_suboptimal_alignment(regs[s], &n_regs[s], i, opt->a * 2 + opt->b);
+		if (i < best) --best;
+	}
+	/* slot 0 is the primary; the survivor is there now (best == 0) */
+	regs[s][0].id = 0; regs[s][0].parent = 0; regs[s][0].sam_pri = 1;
+	regs[s] = mmq_rule_and_mapq(mi, opt, km, &n_regs[s], regs[s], rep_len, is_sr, is_sr_rna, is_splice, 1, 0);
+	return 0;
+}
+
 void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const char **seqs, int *n_regs, mm_reg1_t **regs, mm_tbuf_t *b, const mm_mapopt_t *opt, const char *qname)
 {
 	int i, j, rep_len, qlen_sum, n_regs0, n_mini_pos;
@@ -631,104 +739,44 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 		n_regs0 = mm_filter_strand_retained(n_regs0, regs0);
 	}
 
-	char **chrs_to_drop;
+	int do_lift = (opt->flag & MM_F_LIFT) && mi->lift;
+	int do_shift = do_lift && !(opt->flag & MM_F_LIFT_NOSHIFT);
 
 	if (n_segs == 1) { // uni-segment
 		regs0 = align_regs(opt, mi, b->km, qlens[0], seqs[0], &n_regs0, regs0, a);
 		regs0 = (mm_reg1_t*)realloc(regs0, sizeof(*regs0) * n_regs0);
-
-		int chrs_to_drop_count = n_regs0;
-		chrs_to_drop = collect_seed_chromosome_names(mi, n_regs0, regs0, opt->flag);
-
-		int z;
-		char* delete_name = "delete";
-		for (z = n_regs0 - 1; z > 0; z--) {
-			if (chrs_to_drop[z] != NULL && strcmp(chrs_to_drop[z], delete_name) == 0) {
-				regs0 = remove_second_suboptimal_alignment(regs0, &n_regs0, z, opt->a * 2 + opt->b);
-			}
-		}
-
-		int max_dpmax2 = 0;
-		int max_score = 0;
-		for (z = 1; z < n_regs0; z++) {
-			regs0[z].id = z;
-			if (regs0[z].p->dp_score > max_dpmax2) {
-				max_dpmax2 = regs0[z].p->dp_score;
-			}
-			if (regs0[z].score > max_score) {
-				max_score = regs0[z].score;
-			}
-		}
-
-		if (n_regs0 > 0) {
-			if (regs0[0].p != NULL)
-				regs0[0].p->dp_max2 = max_dpmax2;
-			regs0[0].subsc = max_score;
-		}
-
-		mm_set_mapq2(b->km, n_regs0, regs0, opt->min_chain_score, opt->a, rep_len, is_sr || is_sr_rna, is_splice, chrs_to_drop);
-		free_chromosome_names(chrs_to_drop, chrs_to_drop_count);
-		/* project contig placements onto the base reference: after mapq, which
-		 * is scored on the candidate set as the aligner saw it. */
-		if ((opt->flag & MM_F_LIFT) && mi->lift) mm_lift_regs(mi, n_regs0, regs0);
+		/* project contig placements onto the base reference BEFORE the locus
+		 * rule and mapq, so the rule compares exact base coordinates */
+		if (do_lift && mm_lift_regs(mi, n_regs0, regs0) > 0 && do_shift)
+			for (i = 0; i < n_regs0; ++i) if (regs0[i].lifted) mm_lift_refresh(mi, qlens[0], seqs[0], &regs0[i]);
+		regs0 = mmq_rule_and_mapq(mi, opt, b->km, &n_regs0, regs0, rep_len, is_sr, is_sr_rna, is_splice, 0, 1);
 		n_regs[0] = n_regs0, regs[0] = regs0;
 	} else { // multi-segment
 		mm_seg_t *seg;
+		int both_ambig = 0;
 		seg = mm_seg_gen(b->km, hash, n_segs, qlens, n_regs0, regs0, n_regs, regs, a); // split fragment chain to separate segment chains
 		free (regs0);
 		for (i = 0; i < n_segs; ++i) {
 			mm_set_parent(b->km, opt->mask_level, opt->mask_len, n_regs[i], regs[i], opt->a * 2 + opt->b, opt->flag&MM_F_HARD_MLEVEL, opt->alt_drop); // update mm_reg1_t::parent
 			regs[i] = align_regs(opt, mi, b->km, qlens[i], seqs[i], &n_regs[i], regs[i], seg[i].a);
-
-			int chrs_to_drop_count = n_regs[i];
-			chrs_to_drop = collect_seed_chromosome_names(mi, n_regs[i], regs[i], opt->flag);
-			
-			int z;
-			char* delete_name = "delete";
-			for (z = n_regs[i] - 1; z > 0; z--) {
-				if (chrs_to_drop[z] != NULL && strcmp(chrs_to_drop[z], delete_name) == 0) {
-					regs[i] = remove_second_suboptimal_alignment(regs[i], &n_regs[i], z, opt->a * 2 + opt->b);
-				}
+			/* project BEFORE the locus rule (exact coordinates) and BEFORE
+			 * pairing (a read on a contig and its mate on the chromosome carry
+			 * different rids until this runs) */
+			if (do_lift && mm_lift_regs(mi, n_regs[i], regs[i]) > 0 && do_shift) {
+				int z;
+				for (z = 0; z < n_regs[i]; ++z) if (regs[i][z].lifted) mm_lift_refresh(mi, qlens[i], seqs[i], &regs[i][z]);
 			}
-
-			if (n_regs[i] > 0) {
-				int max_dpmax2 = 0;
-				int max_score = 0;
-
-				for (z = 1; z < n_regs[i]; z++) {
-					regs[i][z].id = z;
-					if (regs[i][z].p->dp_score > max_dpmax2) {
-						max_dpmax2 = regs[i][z].p->dp_score;
-					}
-					if (regs[i][z].score > max_score) {
-						max_score = regs[i][z].score;
-					}
-				}
-
-				if (regs[i][0].p != NULL)
-					regs[i][0].p->dp_max2 = max_dpmax2;
-	 			regs[i][0].subsc = max_score;
-
-				mm_reg1_t *copy = (mm_reg1_t *)malloc(n_regs[i] * sizeof(mm_reg1_t));
-				memcpy(copy, regs[i], n_regs[i] * sizeof(mm_reg1_t));
-	 			copy[0].n_sub = 0;
- 				mm_set_parent(b->km, opt->mask_level, opt->mask_len, n_regs[i], copy, opt->a * 2 + opt->b, opt->flag&MM_F_HARD_MLEVEL, opt->alt_drop); // update mm_reg1_t::parent
-	 			regs[i][0].n_sub = copy[0].n_sub;
-
- 				free(copy);
-			}
-
-			mm_set_mapq2(b->km, n_regs[i], regs[i], opt->min_chain_score, opt->a, rep_len, is_sr || is_sr_rna, is_splice, chrs_to_drop);
-			free_chromosome_names(chrs_to_drop, chrs_to_drop_count);
 		}
+		for (i = 0; i < n_segs; ++i)
+			regs[i] = mmq_rule_and_mapq(mi, opt, b->km, &n_regs[i], regs[i], rep_len, is_sr, is_sr_rna, is_splice, 1, 1);
 		mm_seg_free(b->km, n_segs, seg);
-		/* project BEFORE pairing: a read on a contig and its mate on the
-		 * chromosome carry different rids until this runs, so mm_pair()
-		 * cannot relate them at all. */
-		if ((opt->flag & MM_F_LIFT) && mi->lift)
-			for (i = 0; i < n_segs; ++i) mm_lift_regs(mi, n_regs[i], regs[i]);
-		if (n_segs == 2 && opt->pe_ori >= 0 && (opt->flag&MM_F_CIGAR))
-			mm_pair(b->km, max_chain_gap_ref, opt->pe_bonus, opt->a * 2 + opt->b, opt->a, qlens, n_regs, regs); // pairing
+		if (n_segs == 2 && opt->pe_ori >= 0 && (opt->flag&MM_F_CIGAR)) {
+			if (opt->flag & MM_F_MATE_RESOLVE)
+				both_ambig = mm_mate_resolve(mi, opt, b->km, n_regs, regs, rep_len, is_sr, is_sr_rna, is_splice);
+			mm_pair(b->km, max_chain_gap_ref, opt->pe_bonus, opt->a * 2 + opt->b, opt->a, qlens, n_regs, regs, !!(opt->flag & MM_F_MATE_RESOLVE)); // pairing
+			if (both_ambig)
+				for (i = 0; i < 2; ++i) { int z; for (z = 0; z < n_regs[i]; ++z) if (regs[i][z].sam_pri) regs[i][z].pe_ambig = 1; }
+		}
 	}
 
 
@@ -761,7 +809,7 @@ void mm_map_frag(const mm_idx_t *mi, int n_segs, const int *qlens, const char **
 		int i;
 		for (i = 0; i < n_segs; ++i)
 			mm_map_frag_core(mi, 1, &qlens[i], &seqs[i], &n_regs[i], &regs[i], b, opt, qname);
-		mm_pair(b->km, opt->max_gap_ref, opt->pe_bonus, opt->a * 2 + opt->b, opt->a, qlens, n_regs, regs);
+		mm_pair(b->km, opt->max_gap_ref, opt->pe_bonus, opt->a * 2 + opt->b, opt->a, qlens, n_regs, regs, !!(opt->flag & MM_F_MATE_RESOLVE));
 	} else {
 		mm_map_frag_core(mi, n_segs, qlens, seqs, n_regs, regs, b, opt, qname);
 	}
@@ -912,7 +960,7 @@ static void merge_hits(step_t *s)
 			mm_set_mapq2(km, s->n_reg[k], s->reg[k], opt->min_chain_score, opt->a, rep_len, !!(opt->flag & (MM_F_SR|MM_F_SR_RNA)), !!(opt->flag & MM_F_SPLICE), NULL);
 		}
 		if (s->n_seg[f] == 2 && opt->pe_ori >= 0 && (opt->flag&MM_F_CIGAR))
-			mm_pair(km, frag_gap_part[0], opt->pe_bonus, opt->a * 2 + opt->b, opt->a, qlens, &s->n_reg[k0], &s->reg[k0]);
+			mm_pair(km, frag_gap_part[0], opt->pe_bonus, opt->a * 2 + opt->b, opt->a, qlens, &s->n_reg[k0], &s->reg[k0], !!(opt->flag & MM_F_MATE_RESOLVE));
 	}
 	free(qlens);
 	km_destroy(km);

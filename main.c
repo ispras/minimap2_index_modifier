@@ -95,6 +95,9 @@ static ko_longopt_t long_options[] = {
 	{ "lift",           ko_no_argument,       712 },
 	{ "lift-map",       ko_required_argument, 713 },
 	{ "lift-junction",  ko_required_argument, 714 },
+	{ "mate-resolve",   ko_no_argument,       715 },
+	{ "mate-mapq",      ko_required_argument, 716 },
+	{ "lift-noshift",   ko_no_argument,       717 },
     { "parse-haplotype",ko_no_argument,       701 },
 	{ "help",           ko_no_argument,       'h' },
 	{ "max-intron-len", ko_required_argument, 'G' },
@@ -281,6 +284,9 @@ int main(int argc, char *argv[])
 		else if (c == 712) opt.flag |= MM_F_LIFT; // --lift
 		else if (c == 713) fn_lift_map = o.arg; // --lift-map
 		else if (c == 714) lift_jct = atoi(o.arg); // --lift-junction
+		else if (c == 715) opt.flag |= MM_F_MATE_RESOLVE; // --mate-resolve
+		else if (c == 716) opt.mate_mapq = atoi(o.arg); // --mate-mapq
+		else if (c == 717) opt.flag |= MM_F_LIFT_NOSHIFT; // --lift-noshift
         else if (c == 701) ipt.flag |= MM_PARSE_HT;  // --parse-haplotype
 		else if (c == 330) {
 			fprintf(stderr, "[WARNING] \033[1;31m --lj-min-ratio has been deprecated.\033[0m\n");
@@ -389,6 +395,10 @@ int main(int argc, char *argv[])
 		fprintf(fp_help, "    --lift             emit base-reference coordinates for augmentation-contig\n");
 		fprintf(fp_help, "                       placements (no external liftover)\n");
 		fprintf(fp_help, "    --lift-map FILE    TSV of <contig name>\\t<|ALT|-|REF|> for --lift\n");
+		fprintf(fp_help, "    --lift-noshift     (rollback only) no indel left-shift / NM refresh after --lift\n");
+		fprintf(fp_help, "    --mate-resolve     an end whose mate has mapq>=--mate-mapq keeps only candidates\n");
+		fprintf(fp_help, "                       compatible with that mate, nearest first, BEFORE mapq; no 0.2/0.8 blend\n");
+		fprintf(fp_help, "    --mate-mapq INT    standalone mapq that makes a mate unambiguous [%d]\n", opt.mate_mapq);
 		fprintf(fp_help, "    --mapq-quotient    collapse candidate alignments by projection onto the\n");
 		fprintf(fp_help, "                       base reference instead of by sequence name\n");
 		fprintf(fp_help, "    --mapq-prefer-primary  on score ties keep the representative on the base\n");

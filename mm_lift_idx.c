@@ -26,7 +26,7 @@ int mm_lift_build(mm_idx_t *mi, const char *fn_map, int32_t jct, int64_t *n_unre
 	size_t n;
 	int32_t i;
 	int64_t n_ok = 0, n_bad = 0;
-	int32_t *delta = NULL;
+	int32_t *delta = NULL, *ins3 = NULL, *del3 = NULL;
 
 	if (mi == NULL || mi->n_seq == 0 || jct <= 0) return -1;
 	n = (size_t)mi->n_seq;
@@ -40,7 +40,9 @@ int mm_lift_build(mm_idx_t *mi, const char *fn_map, int32_t jct, int64_t *n_unre
 	lt->n = (int32_t)n;
 	lt->a = (mm_lift_rec_t*)calloc(n, sizeof(mm_lift_rec_t));
 	delta = (int32_t*)calloc(n, sizeof(int32_t));
-	if (lt->a == NULL || delta == NULL) { free(delta); free(lt->a); free(lt); return -1; }
+	ins3  = (int32_t*)calloc(n, sizeof(int32_t));
+	del3  = (int32_t*)calloc(n, sizeof(int32_t));
+	if (lt->a == NULL || delta == NULL || ins3 == NULL || del3 == NULL) { free(delta); free(ins3); free(del3); free(lt->a); free(lt); return -1; }
 	for (i = 0; i < lt->n; ++i) delta[i] = INT32_MIN;   /* "not supplied" */
 
 	if (fn_map != NULL) {
@@ -48,22 +50,33 @@ int mm_lift_build(mm_idx_t *mi, const char *fn_map, int32_t jct, int64_t *n_unre
 		char buf[1024];
 		if (fp == NULL) {
 			fprintf(stderr, "[ERROR] --lift-map: cannot open %s\n", fn_map);
-			free(delta); free(lt->a); free(lt);
+			free(delta); free(ins3); free(del3); free(lt->a); free(lt);
 			return -1;
 		}
 		while (fgets(buf, sizeof buf, fp)) {
-			char *tab = strchr(buf, '\t');
+			char *tab = strchr(buf, '\t'), *tab2, *end;
 			int id;
+			long v1, v2;
 			if (tab == NULL) continue;
 			*tab = '\0';
 			id = mm_idx_name2id(mi, buf);
-			if (id >= 0 && id < lt->n) delta[id] = (int32_t)strtol(tab + 1, NULL, 10);
+			if (id < 0 || id >= lt->n) continue;
+			v1 = strtol(tab + 1, &end, 10);
+			tab2 = (*end == '\t') ? end : NULL;
+			if (tab2 == NULL) {
+				delta[id] = (int32_t)v1;                 /* two columns: d = |ALT|-|REF| */
+			} else {                                     /* three columns: ins_len, del_len */
+				v2 = strtol(tab2 + 1, NULL, 10);
+				ins3[id] = (int32_t)v1;
+				del3[id] = (int32_t)v2;
+				delta[id] = INT32_MIN + 1;               /* marker: explicit pair supplied */
+			}
 		}
 		fclose(fp);
 	}
 
 	for (i = 0; i < lt->n; ++i) {
-		int32_t chrom_len, d;
+		int32_t chrom_len, d, jct_i;
 		int64_t pos;
 		int base_id;
 		char save, *nm = mi->seq[i].name;
@@ -79,7 +92,21 @@ int mm_lift_build(mm_idx_t *mi, const char *fn_map, int32_t jct, int64_t *n_unre
 		nm[chrom_len] = save;
 		if (base_id < 0) { ++n_bad; continue; }
 
+		/* a contig closer than jct-1 to the chromosome start has a shortened
+		 * left flank: the generator takes lf = min(flank, pos-1), so the
+		 * junction is min(jct, pos) and off_a is then 0 */
+		jct_i = pos < jct ? (int32_t)pos : jct;
 		d = delta[i];
+		if (d == INT32_MIN + 1) {                        /* explicit (ins_len, del_len) */
+			if (ins3[i] < 0 || del3[i] < 0 || (ins3[i] == 0 && del3[i] == 0)) { ++n_bad; continue; }
+			lt->a[i].base_rid = base_id;
+			lt->a[i].jct      = jct_i;
+			lt->a[i].off_a    = pos - jct_i;
+			lt->a[i].ins_len  = ins3[i];
+			lt->a[i].del_len  = del3[i];
+			++n_ok;
+			continue;
+		}
 		if (d == INT32_MIN) {
 			/* Not supplied.  len = 200 + |ALT|, and an insertion has |REF| = 1,
 			 * so d = len - 201.  The generator requires |ALT| >= 5, hence a
@@ -93,14 +120,14 @@ int mm_lift_build(mm_idx_t *mi, const char *fn_map, int32_t jct, int64_t *n_unre
 		if (d == 0) { ++n_bad; continue; }   /* neither insertion nor deletion */
 
 		lt->a[i].base_rid = base_id;
-		lt->a[i].jct      = jct;
-		lt->a[i].off_a    = pos - jct;
+		lt->a[i].jct      = jct_i;
+		lt->a[i].off_a    = pos - jct_i;
 		lt->a[i].ins_len  = d > 0 ?  d : 0;
 		lt->a[i].del_len  = d < 0 ? -d : 0;
 		++n_ok;
 	}
 
-	free(delta);
+	free(delta); free(ins3); free(del3);
 	mm_lift_destroy((mm_lift_t*)mi->lift);
 	mi->lift = (struct mm_lift_s*)lt;
 	if (n_unresolved) *n_unresolved = n_bad;
@@ -132,6 +159,7 @@ int mm_lift_regs(const mm_idx_t *mi, int n_regs, mm_reg1_t *regs)
 			int64_t a = mm_lift_pos(rec, r->rs);
 			int64_t b = mm_lift_pos(rec, r->re);
 			if (b < a) b = a;
+			r->lift_rid = r->rid; r->lift_rs = r->rs;
 			r->rid = rec->base_rid;
 			r->rs = (int32_t)a;
 			r->re = (int32_t)b;
@@ -166,6 +194,7 @@ int mm_lift_regs(const mm_idx_t *mi, int n_regs, mm_reg1_t *regs)
 			}
 			memcpy(r->p->cigar, buf, (size_t)n_out * 4);
 			r->p->n_cigar = (uint32_t)n_out;
+			r->lift_rid = r->rid; r->lift_rs = r->rs;
 			r->rid = rec->base_rid;
 			r->rs  = (int32_t)rs_out;
 			r->re  = (int32_t)(rs_out + mm_lift_ref_span(buf, n_out));

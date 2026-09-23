@@ -73,7 +73,7 @@ typedef struct {
 #define sort_key_pair(a) ((a).key)
 KRADIX_SORT_INIT(pair, pair_arr_t, sort_key_pair, 8)
 
-void mm_pair(void *km, int max_gap_ref, int pe_bonus, int sub_diff, int match_sc, const int *qlens, int *n_regs, mm_reg1_t **regs)
+void mm_pair(void *km, int max_gap_ref, int pe_bonus, int sub_diff, int match_sc, const int *qlens, int *n_regs, mm_reg1_t **regs, int no_blend)
 {
 	int i, j, s, n, last[2], dp_thres, segs = 0, max_idx[2];
 	int64_t max;
@@ -159,8 +159,13 @@ void mm_pair(void *km, int max_gap_ref, int pe_bonus, int sub_diff, int match_sc
 			mapq_pe_alt = (int)(6.02f * ((max>>32) - (sc.a[sc.n - 2]>>32)) / match_sc - 4.343f * logf(n_sub)); // n_sub > 0 because it counts the optimal, too
 			mapq_pe = mapq_pe < mapq_pe_alt? mapq_pe : mapq_pe_alt;
 		}
-		if (r[0]->mapq < mapq_pe) r[0]->mapq = (int)(.2f * r[0]->mapq + .8f * mapq_pe + .499f);
-		if (r[1]->mapq < mapq_pe) r[1]->mapq = (int)(.2f * r[1]->mapq + .8f * mapq_pe + .499f);
+		if (no_blend) { /* --mate-resolve: the pair-level mapq is taken whole, not blended 0.2/0.8 (owner's decision 24.09) */
+			if (r[0]->mapq < mapq_pe) r[0]->mapq = mapq_pe;
+			if (r[1]->mapq < mapq_pe) r[1]->mapq = mapq_pe;
+		} else {
+			if (r[0]->mapq < mapq_pe) r[0]->mapq = (int)(.2f * r[0]->mapq + .8f * mapq_pe + .499f);
+			if (r[1]->mapq < mapq_pe) r[1]->mapq = (int)(.2f * r[1]->mapq + .8f * mapq_pe + .499f);
+		}
 		if (sc.n == 1) {
 			if (r[0]->mapq < 2) r[0]->mapq = 2;
 			if (r[1]->mapq < 2) r[1]->mapq = 2;

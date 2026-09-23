@@ -637,6 +637,8 @@ void mm_write_sam3(kstring_t *s, const mm_idx_t *mi, const mm_bseq1_t *t, int se
 	if (n_seg > 2) mm_sprintf_lite(s, "\tFI:i:%d", seg_idx);
 	if (r) {
 		write_tags(s, r);
+		if (r->lifted) mm_sprintf_lite(s, "\tlt:Z:%s,%d", mi->seq[r->lift_rid].name, r->lift_rs + 1); // where it sat before --lift projected it
+		if (r->pe_ambig) mm_sprintf_lite(s, "\tpa:i:1"); // both ends ambiguous: --mate-resolve could not settle the pair
 		if (r->parent == r->id && r->p && n_regs > 1 && regs && r >= regs && r - regs < n_regs) { // supplementary aln may exist
 			int i, n_sa = 0; // n_sa: number of SA fields
 			for (i = 0; i < n_regs; ++i)

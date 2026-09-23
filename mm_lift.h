@@ -264,7 +264,10 @@ int mm_lift_cigar(const mm_lift_rec_t *rec, int32_t ctg_len,
  *   - ins_len/del_len come from the signed delta d = |ALT| - |REF|:
  *       d > 0 -> ins_len = d,  del_len = 0
  *       d < 0 -> ins_len = 0,  del_len = -d
- *     d is read from fn_map, a two-column "<contig name>\t<d>" TSV.  For a
+ *     d is read from fn_map, a TSV with either two columns
+ *     "<contig name>\t<d>" or three columns "<contig name>\t<ins_len>\t<del_len>"
+ *     (the three-column form is required for complex records where both
+ *     |REF| > 1 and |ALT| > 1, which a single delta cannot express).  For a
  *     contig absent from the file, d is inferred as len-201 when that is >= 4
  *     (an insertion, since the generator requires |ALT| >= 5 and |REF| == 1);
  *     otherwise the contig is unresolved.  See the metadata audit above for
@@ -297,6 +300,24 @@ void mm_lift_destroy(mm_lift_t *lt);
  * Returns the number of regs actually projected.
  * ------------------------------------------------------------------------- */
 int mm_lift_regs(const mm_idx_t *mi, int n_regs, mm_reg1_t *regs);
+
+/* ---------------------------------------------------------------------------
+ * "Same locus" test on two candidates AFTER projection.
+ *
+ * Two candidates are one hypothesis about where the read comes from iff they
+ * lie on the same sequence, on the same strand, and at least one query base
+ * is placed on the same reference base by both alignments -- i.e. the two
+ * alignments share a diagonal (ref - query offset) on a common query
+ * interval.  This is exact, symmetric (which of the two came from a contig
+ * plays no part), and sign-sensitive: the neighbouring copy of a tandem
+ * repeat is shifted by the period and shares no diagonal, so it stays a
+ * competitor and mapq 0 there is the right answer.
+ *
+ * Works on r->p->cigar when present (block-exact), and on the end points
+ * (single diagonal) when the alignment has no CIGAR.
+ * Returns 1 if same locus, 0 otherwise.
+ * ------------------------------------------------------------------------- */
+int mm_lift_same_locus(const mm_reg1_t *a, const mm_reg1_t *b);
 
 #ifdef __cplusplus
 }

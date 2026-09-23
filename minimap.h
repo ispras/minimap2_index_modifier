@@ -50,7 +50,9 @@
 #define MM_F_OUT_JUNC      (0x10000000000LL)
 #define MM_F_MAPQ_QUOTIENT (0x20000000000LL) // collapse candidates by projection onto the base reference
 #define MM_F_MAPQ_PREFER_T (0x40000000000LL) // on score ties keep the representative that lies on the base reference
-#define MM_F_LIFT          (0x80000000000LL) // project augmentation-contig placements onto the base reference before output
+#define MM_F_LIFT          (0x80000000000LL) // project augmentation-contig placements onto the base reference BEFORE the mapq rule
+#define MM_F_MATE_RESOLVE  (0x100000000000LL) // an unambiguous mate prunes the other end's candidates before mapq; no 0.2/0.8 blend in mm_pair()
+#define MM_F_LIFT_NOSHIFT  (0x200000000000LL) // (rollback only) skip indel left-shift and NM refresh after projection
 
 #define MM_I_HPC          0x1
 #define MM_I_NO_SEQ       0x2
@@ -125,7 +127,8 @@ typedef struct {
 	int32_t mlen, blen;     // seeded exact match length; seeded alignment block length
 	int32_t n_sub;          // number of suboptimal mappings
 	int32_t score0;         // initial chaining score (before chain merging/spliting)
-	uint32_t mapq:8, split:2, rev:1, inv:1, sam_pri:1, proper_frag:1, pe_thru:1, seg_split:1, seg_id:8, split_inv:1, is_alt:1, strand_retained:1, is_spliced:1, lifted:1, dummy:3;
+	uint32_t mapq:8, split:2, rev:1, inv:1, sam_pri:1, proper_frag:1, pe_thru:1, seg_split:1, seg_id:8, split_inv:1, is_alt:1, strand_retained:1, is_spliced:1, lifted:1, pe_ambig:1, dummy:2;
+	int32_t lift_rid, lift_rs;  // where the alignment sat before projection (contig rid and 0-based contig start); -1 if not lifted
 	uint32_t hash;
 	float div;
 	mm_extra_t *p;
@@ -163,6 +166,7 @@ typedef struct {
 	int best_n;      // top best_n chains are subjected to DP alignment
 
 	float alt_drop;
+	int mate_mapq;   // --mate-mapq: a mate with standalone mapq >= this is "unambiguous" for MM_F_MATE_RESOLVE
 
 	int a, b, q, e, q2, e2; // matching score, mismatch, gap-open and gap-ext penalties
 	int transition; // transition mismatch score (A:G, C:T)

@@ -224,3 +224,47 @@ int mm_lift_cigar(const mm_lift_rec_t *rec, int32_t ctg_len,
 	(void)ref_span;
 	return 0;
 }
+
+/* ---- same-locus test: shared diagonal on a common query interval ---- */
+
+typedef struct { int32_t qs, qe; int64_t diag; } diag_seg_t;
+
+/* Enumerate the diagonals of an alignment as (query interval, ref - query).
+ * Returns the number written; cap bounds the output. */
+static int32_t diag_segs(const mm_reg1_t *r, diag_seg_t *out, int32_t cap)
+{
+	int32_t n = 0;
+	if (r->p == NULL || r->p->n_cigar == 0) {
+		if (cap > 0) { out[0].qs = r->qs; out[0].qe = r->qe; out[0].diag = (int64_t)r->rs - r->qs; n = 1; }
+		return n;
+	} else {
+		int64_t t = r->rs; int32_t q = r->qs; uint32_t k;
+		for (k = 0; k < r->p->n_cigar; ++k) {
+			int op = CIG_OP(r->p->cigar[k]);
+			int32_t l = CIG_LEN(r->p->cigar[k]);
+			if (op == OP_M || op == OP_EQ || op == OP_X) {
+				if (n < cap) { out[n].qs = q; out[n].qe = q + l; out[n].diag = t - q; }
+				++n; t += l; q += l;
+			} else if (op == OP_I || op == OP_S) {
+				q += l;
+			} else if (op == OP_D || op == OP_N) {
+				t += l;
+			}
+		}
+		return n < cap ? n : cap;
+	}
+}
+
+int mm_lift_same_locus(const mm_reg1_t *a, const mm_reg1_t *b)
+{
+	diag_seg_t da[64], db[64];
+	int32_t na, nb, i, j;
+	if (a->rid != b->rid || a->rev != b->rev) return 0;
+	na = diag_segs(a, da, 64);
+	nb = diag_segs(b, db, 64);
+	for (i = 0; i < na; ++i)
+		for (j = 0; j < nb; ++j)
+			if (da[i].diag == db[j].diag && da[i].qs < db[j].qe && db[j].qs < da[i].qe)
+				return 1;
+	return 0;
+}
