@@ -430,6 +430,74 @@ static void t7_reverse_clip(void)
 	}
 }
 
+/* ---- 8. same-locus test: shared diagonal, sign-sensitive ------------ */
+static mm_reg1_t mk_reg(int rid, int rev, int rs, int qs, int qe, const uint32_t *cig, int n, mm_extra_t **keep)
+{
+	mm_reg1_t r; memset(&r, 0, sizeof r);
+	r.rid = rid; r.rev = rev; r.rs = rs; r.qs = qs; r.qe = qe;
+	if (cig) {
+		int i, span = 0;
+		mm_extra_t *p = (mm_extra_t*)calloc(1, sizeof(mm_extra_t) + n * 4);
+		p->n_cigar = n; memcpy(p->cigar, cig, n * 4);
+		for (i = 0; i < n; ++i) if (CIG_OP(cig[i]) == OP_M || CIG_OP(cig[i]) == OP_D) span += CIG_LEN(cig[i]);
+		r.p = p; r.re = rs + span; *keep = p;
+	} else r.re = rs + (qe - qs);
+	return r;
+}
+
+static void t8_same_locus(void)
+{
+	mm_extra_t *pa, *pb, *pc, *pd, *pe, *pf;
+	uint32_t c150[] = { CIG_MK(150, OP_M) };
+	uint32_t cins[] = { CIG_MK(50, OP_M), CIG_MK(4, OP_I), CIG_MK(96, OP_M) };   /* projected contig read, insertion */
+	uint32_t cdel[] = { CIG_MK(50, OP_M), CIG_MK(4, OP_D), CIG_MK(100, OP_M) };  /* projected contig read, deletion */
+	uint32_t cclip[] = { CIG_MK(96, OP_M) };                                     /* base placement anchored right, 54 soft-clipped */
+	mm_reg1_t a, b, c, d, e, f;
+	puts("[8] same locus: shared diagonal on a common query interval");
+	/* insertion contig read projected vs the same read placed on the base with the same insertion */
+	a = mk_reg(0, 0, 1000, 0, 150, cins, 3, &pa);
+	b = mk_reg(0, 0, 1000, 0, 150, cins, 3, &pb);
+	expect_int("identical projected alignments", mm_lift_same_locus(&a, &b), 1);
+	/* base placement that anchors only the right block: shares the block-B diagonal */
+	c = mk_reg(0, 0, 1050, 54, 150, cclip, 1, &pc);       /* diag = 1050-54 = 996 = (1000+50) - 54  */
+	expect_int("right-anchored base placement shares block B", mm_lift_same_locus(&a, &c), 1);
+	/* neighbouring tandem copy: shifted by the period, no shared diagonal */
+	d = mk_reg(0, 0, 1040, 0, 150, c150, 1, &pd);
+	expect_int("tandem neighbour +40 is NOT the same locus", mm_lift_same_locus(&a, &d), 0);
+	d.rs = 960; d.re = 1110;
+	expect_int("tandem neighbour -40 is NOT the same locus", mm_lift_same_locus(&a, &d), 0);
+	/* same coordinates, other strand */
+	e = mk_reg(0, 1, 1000, 0, 150, cins, 3, &pe);
+	expect_int("other strand is NOT the same locus", mm_lift_same_locus(&a, &e), 0);
+	/* other sequence */
+	f = mk_reg(1, 0, 1000, 0, 150, cins, 3, &pf);
+	expect_int("other rid is NOT the same locus", mm_lift_same_locus(&a, &f), 0);
+	/* deletion: block B diagonal differs from block A by +4; a base read on block A only */
+	{
+		mm_extra_t *pg, *ph;
+		mm_reg1_t g = mk_reg(0, 0, 1000, 0, 150, cdel, 3, &pg);
+		uint32_t c50[] = { CIG_MK(50, OP_M) }, c100[] = { CIG_MK(100, OP_M) };
+		mm_reg1_t h = mk_reg(0, 0, 1000, 0, 50, c50, 1, &ph);
+		expect_int("deletion contig read vs base read on block A", mm_lift_same_locus(&g, &h), 1);
+		h.rs = 1004; h.re = 1054;                          /* diag 1004 on q in [0,50): block B's diagonal, block A's query range */
+		expect_int("block-B diagonal but query interval disjoint", mm_lift_same_locus(&g, &h), 0);
+		free(ph);
+		h = mk_reg(0, 0, 1054, 50, 150, c100, 1, &ph);     /* diag 1004 on q in [50,150): block B */
+		expect_int("base read sharing block B of a deletion", mm_lift_same_locus(&g, &h), 1);
+		free(pg); free(ph);
+	}
+	/* no CIGAR: end points only */
+	{
+		mm_reg1_t x, y; mm_extra_t *dummy = 0;
+		x = mk_reg(0, 0, 500, 0, 100, 0, 0, &dummy);
+		y = mk_reg(0, 0, 520, 20, 100, 0, 0, &dummy);
+		expect_int("no-CIGAR regs on one diagonal", mm_lift_same_locus(&x, &y), 1);
+		y.rs = 521; y.re = 601;
+		expect_int("no-CIGAR regs off by one", mm_lift_same_locus(&x, &y), 0);
+	}
+	free(pa); free(pb); free(pc); free(pd); free(pe); free(pf);
+}
+
 int main(void)
 {
 	puts("mm_lift unit tests");
@@ -441,6 +509,7 @@ int main(void)
 	t5_edges();
 	t6_against_real_chain();
 	t7_reverse_clip();
+	t8_same_locus();
 	printf("\n%d checks, %d failures\n", checks, fails);
 	return fails ? 1 : 0;
 }
