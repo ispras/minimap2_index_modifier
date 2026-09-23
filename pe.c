@@ -12,6 +12,13 @@ void mm_select_sub_multi(void *km, float pri_ratio, float pri1, float pri2, int 
 			int to_keep = 0;
 			if (r[i].parent == i) { // primary
 				to_keep = 1;
+			} else if (r[i].on_ctg) {
+				/* --lift: a chain on an augmentation contig is never dropped here.
+				 * The fragment chain "base copy with a gap + mate on the chromosome"
+				 * scores about twice a single-end contig chain, so the contig chain
+				 * would lose on pri_ratio BEFORE DP ever compares the alignments;
+				 * the DP score (align_regs -> mm_select_sub) is the judge instead. */
+				to_keep = 2;
 			} else if (r[i].score + min_diff >= r[r[i].parent].score) {
 				to_keep = 1;
 			} else {
@@ -31,7 +38,7 @@ void mm_select_sub_multi(void *km, float pri_ratio, float pri1, float pri2, int 
 					}
 				}
 			}
-			if (to_keep && r[i].parent != i) {
+			if (to_keep == 1 && r[i].parent != i) {
 				if (n_2nd++ >= best_n) to_keep = 0; // don't keep if there are too many secondary hits
 			}
 			if (to_keep) r[k++] = r[i];

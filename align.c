@@ -1054,7 +1054,13 @@ void mm_update_dp_max(int qlen, int n_regs, mm_reg1_t *regs, float frac, int a, 
  * read of the same allele agree on where the indel is (DESIGN.md class C3).
  * dp_score/dp_max are NOT touched: they are the score of the ALT hypothesis,
  * scored against the allele the read actually carries (DESIGN.md §4). */
-void mm_lift_refresh(const mm_idx_t *mi, int qlen, const char *qstr, mm_reg1_t *r)
+/* what & 1: run mm_fix_cigar (indel left-shift, leading I/D) against the base;
+ * what & 2: recount mlen/blen/n_ambi against the base (NM).  The two are split
+ * because mapq uses identity = mlen/blen and must see the CONTIG identity (the
+ * ALT hypothesis the read actually matches), not the base identity in which
+ * the junction indel counts as non-identity; NM in the output must be the edit
+ * distance against the base. */
+void mm_lift_refresh(const mm_idx_t *mi, int qlen, const char *qstr, mm_reg1_t *r, int what)
 {
 	extern unsigned char seq_nt4_table[256];
 	uint8_t *qbuf, *tseq, *qseq;
@@ -1081,8 +1087,11 @@ void mm_lift_refresh(const mm_idx_t *mi, int qlen, const char *qstr, mm_reg1_t *
 	}
 	mm_idx_getseq(mi, r->rid, r->rs, r->re, tseq);
 	qseq = qbuf;
-	mm_fix_cigar(r, qseq, tseq, &qshift, &tshift);
-	qseq += qshift, tseq += tshift;
+	if (what & 1) {
+		mm_fix_cigar(r, qseq, tseq, &qshift, &tshift);
+		qseq += qshift, tseq += tshift;
+	}
+	if (!(what & 2)) { free(qbuf); return; }
 	r->blen = r->mlen = 0; p->n_ambi = 0;
 	for (k = 0; k < p->n_cigar; ++k) {
 		uint32_t op = p->cigar[k]&0xf, len = p->cigar[k]>>4;

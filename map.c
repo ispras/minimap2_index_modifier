@@ -577,13 +577,17 @@ static mm_reg1_t *mmq_rule_and_mapq(const mm_idx_t *mi, const mm_mapopt_t *opt, 
 /* A candidate c is compatible with the (unambiguous) mate m when both lie on
  * one sequence, on opposite strands (FR), and the fragment they imply is no
  * longer than max_frag_len.  Returns the implied fragment length, or -1. */
-static int mm_mate_compat(const mm_mapopt_t *opt, const mm_reg1_t *c, const mm_reg1_t *m)
+static int mm_mate_compat(const mm_mapopt_t *opt, int s, const mm_reg1_t *c, const mm_reg1_t *m)
 {
 	int lo, hi, span;
-	if (c->p == NULL || c->rid != m->rid || c->rev == m->rev) return -1;
-	{	/* FR: the forward end must not lie downstream of the reverse end */
-		const mm_reg1_t *f = c->rev ? m : c, *r = c->rev ? c : m;
-		if (f->rs > r->re) return -1;
+	/* In fragment mode the second read is reverse-complemented before mapping
+	 * (mm_map_frag), so a proper FR pair has BOTH segments with the same rev;
+	 * mm_pair() encodes the same convention (key bit = s ^ rev). */
+	if (c->p == NULL || c->rid != m->rid || c->rev != m->rev) return -1;
+	if (opt->pe_ori == 1) {	/* FR: the left end is segment 0 when rev == 0, segment 1 when rev == 1 */
+		const mm_reg1_t *seg0 = s == 0 ? c : m, *seg1 = s == 0 ? m : c;
+		const mm_reg1_t *left = c->rev ? seg1 : seg0, *right = c->rev ? seg0 : seg1;
+		if (left->rs > right->re) return -1;
 	}
 	lo = c->rs < m->rs ? c->rs : m->rs;
 	hi = c->re > m->re ? c->re : m->re;
@@ -601,7 +605,7 @@ static int mm_mate_compat(const mm_mapopt_t *opt, const mm_reg1_t *c, const mm_r
 static int mm_mate_resolve(const mm_idx_t *mi, const mm_mapopt_t *opt, void *km, int *n_regs, mm_reg1_t **regs,
                            int rep_len, int is_sr, int is_sr_rna, int is_splice)
 {
-	int s, t, i, best = -1, best_span = INT32_MAX, n_compat = 0, unamb[2];
+	int s, t, i, best = -1, best_span = INT32_MAX, n_compat = 0, unamb[2], maxdp = 0;
 	mm_reg1_t *anchor;
 	if (n_regs[0] == 0 || n_regs[1] == 0) return 0;
 	for (s = 0; s < 2; ++s) unamb[s] = regs[s][0].mapq >= opt->mate_mapq;
@@ -609,8 +613,18 @@ static int mm_mate_resolve(const mm_idx_t *mi, const mm_mapopt_t *opt, void *km,
 	if (!unamb[0] && !unamb[1]) return 1;
 	s = unamb[0] ? 1 : 0; t = 1 - s;
 	anchor = &regs[t][0];
+	/* only the candidates that made the end ambiguous take part: those within
+	 * sub_diff (one mismatch) of the best DP score -- the same window
+	 * mm_set_parent() uses for n_sub.  A clipped partial alignment that happens
+	 * to sit nearest the mate is not a hypothesis the read was torn between. */
+	for (i = 0; i < n_regs[s]; ++i)
+		if (regs[s][i].p && regs[s][i].p->dp_max > maxdp) maxdp = regs[s][i].p->dp_max;
+	if (mm_dbg_flag & MM_DBG_PRINT_QNAME) fprintf(stderr, "MR\tseg=%d n=%d mapq=%d anchor=%d:%d-%d rev=%d\n", s, n_regs[s], regs[s][0].mapq, anchor->rid, anchor->rs, anchor->re, anchor->rev);
 	for (i = 0; i < n_regs[s]; ++i) {
-		int span = mm_mate_compat(opt, &regs[s][i], anchor);
+		int span;
+		if (regs[s][i].p == NULL || regs[s][i].p->dp_max < maxdp - (opt->a * 2 + opt->b)) continue;
+		span = mm_mate_compat(opt, s, &regs[s][i], anchor);
+		if (mm_dbg_flag & MM_DBG_PRINT_QNAME) fprintf(stderr, "MR\t  cand %d: %d:%d-%d q%d-%d rev=%d dp_max=%d dp_score=%d span=%d\n", i, regs[s][i].rid, regs[s][i].rs, regs[s][i].re, regs[s][i].qs, regs[s][i].qe, regs[s][i].rev, regs[s][i].p->dp_max, regs[s][i].p->dp_score, span);
 		if (span < 0) continue;
 		++n_compat;
 		if (span < best_span) best_span = span, best = i;   /* ties: lower index = better score */
@@ -722,6 +736,11 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 	b->rep_len = rep_len;
 
 	regs0 = mm_gen_regs(b->km, hash, qlen_sum, n_regs0, u, a, !!(opt->flag&MM_F_QSTRAND));
+	if ((opt->flag & MM_F_LIFT) && mi->lift) { /* chains on augmentation contigs survive fragment-level selection (pe.c) */
+		const mm_lift_t *lt = (const mm_lift_t*)mi->lift;
+		for (i = 0; i < n_regs0; ++i)
+			regs0[i].on_ctg = (regs0[i].rid >= 0 && regs0[i].rid < lt->n && lt->a[regs0[i].rid].base_rid >= 0);
+	}
 	if (mi->n_alt) {
 		mm_mark_alt(mi, n_regs0, regs0);
 		mm_hit_sort(b->km, &n_regs0, regs0, opt->alt_drop); // this step can be merged into mm_gen_regs(); will do if this shows up in profile
@@ -748,8 +767,10 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 		/* project contig placements onto the base reference BEFORE the locus
 		 * rule and mapq, so the rule compares exact base coordinates */
 		if (do_lift && mm_lift_regs(mi, n_regs0, regs0) > 0 && do_shift)
-			for (i = 0; i < n_regs0; ++i) if (regs0[i].lifted) mm_lift_refresh(mi, qlens[0], seqs[0], &regs0[i]);
+			for (i = 0; i < n_regs0; ++i) if (regs0[i].lifted) mm_lift_refresh(mi, qlens[0], seqs[0], &regs0[i], 1);
 		regs0 = mmq_rule_and_mapq(mi, opt, b->km, &n_regs0, regs0, rep_len, is_sr, is_sr_rna, is_splice, 0, !(opt->flag & MM_F_NO_MAPQ_RULE));
+		if (do_shift) /* NM against the base, after mapq (which used the contig identity) */
+			for (i = 0; i < n_regs0; ++i) if (regs0[i].lifted) mm_lift_refresh(mi, qlens[0], seqs[0], &regs0[i], 2);
 		n_regs[0] = n_regs0, regs[0] = regs0;
 	} else { // multi-segment
 		mm_seg_t *seg;
@@ -764,7 +785,7 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 			 * different rids until this runs) */
 			if (do_lift && mm_lift_regs(mi, n_regs[i], regs[i]) > 0 && do_shift) {
 				int z;
-				for (z = 0; z < n_regs[i]; ++z) if (regs[i][z].lifted) mm_lift_refresh(mi, qlens[i], seqs[i], &regs[i][z]);
+				for (z = 0; z < n_regs[i]; ++z) if (regs[i][z].lifted) mm_lift_refresh(mi, qlens[i], seqs[i], &regs[i][z], 1);
 			}
 		}
 		for (i = 0; i < n_segs; ++i)
@@ -773,9 +794,13 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 		if (n_segs == 2 && opt->pe_ori >= 0 && (opt->flag&MM_F_CIGAR)) {
 			if (opt->flag & MM_F_MATE_RESOLVE)
 				both_ambig = mm_mate_resolve(mi, opt, b->km, n_regs, regs, rep_len, is_sr, is_sr_rna, is_splice);
+			if (do_shift) /* NM against the base, after every mapq computation (they used the contig identity) */
+				for (i = 0; i < n_segs; ++i) { int z; for (z = 0; z < n_regs[i]; ++z) if (regs[i][z].lifted) mm_lift_refresh(mi, qlens[i], seqs[i], &regs[i][z], 2); }
 			mm_pair(b->km, max_chain_gap_ref, opt->pe_bonus, opt->a * 2 + opt->b, opt->a, qlens, n_regs, regs, !!(opt->flag & MM_F_MATE_RESOLVE)); // pairing
 			if (both_ambig)
 				for (i = 0; i < 2; ++i) { int z; for (z = 0; z < n_regs[i]; ++z) if (regs[i][z].sam_pri) regs[i][z].pe_ambig = 1; }
+		} else if (do_shift) {
+			for (i = 0; i < n_segs; ++i) { int z; for (z = 0; z < n_regs[i]; ++z) if (regs[i][z].lifted) mm_lift_refresh(mi, qlens[i], seqs[i], &regs[i][z], 2); }
 		}
 	}
 
