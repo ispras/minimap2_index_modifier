@@ -608,7 +608,20 @@ static int mm_mate_resolve(const mm_idx_t *mi, const mm_mapopt_t *opt, void *km,
 	int s, t, i, best = -1, best_span = INT32_MAX, n_compat = 0, unamb[2], maxdp = 0;
 	mm_reg1_t *anchor;
 	if (n_regs[0] == 0 || n_regs[1] == 0) return 0;
-	for (s = 0; s < 2; ++s) unamb[s] = regs[s][0].mapq >= opt->mate_mapq;
+	/* "unambiguous" = standalone mapq at least --mate-mapq AND no competitor
+	 * within sub_diff of the best DP score (n_sub == 0).  The second condition
+	 * matters because for short paired reads the fragment chain that includes
+	 * the mate inflates the primary's chaining score, and the mapq formula then
+	 * reports 60 for a read with six equally-scoring copies. */
+	for (s = 0; s < 2; ++s) unamb[s] = regs[s][0].mapq >= opt->mate_mapq && regs[s][0].n_sub == 0;
+	if (mm_dbg_flag & MM_DBG_PRINT_QNAME)
+		fprintf(stderr, "MR0\tn=%d,%d slot0 mapq=%d,%d id/parent=%d/%d,%d/%d sam_pri=%d,%d\n", n_regs[0], n_regs[1], regs[0][0].mapq, regs[1][0].mapq,
+				regs[0][0].id, regs[0][0].parent, regs[1][0].id, regs[1][0].parent, regs[0][0].sam_pri, regs[1][0].sam_pri);
+	if (mm_dbg_flag & MM_DBG_PRINT_QNAME)
+		for (s = 0; s < 2; ++s) for (i = 0; i < n_regs[s]; ++i)
+			fprintf(stderr, "MR0\t  seg%d[%d] %d:%d-%d q%d-%d rev=%d id=%d par=%d score=%d dp=%d dp_max2=%d subsc=%d n_sub=%d mapq=%d lifted=%d\n", s, i,
+					regs[s][i].rid, regs[s][i].rs, regs[s][i].re, regs[s][i].qs, regs[s][i].qe, regs[s][i].rev, regs[s][i].id, regs[s][i].parent, regs[s][i].score,
+					regs[s][i].p ? regs[s][i].p->dp_score : -1, regs[s][i].p ? regs[s][i].p->dp_max2 : -1, regs[s][i].subsc, regs[s][i].n_sub, regs[s][i].mapq, regs[s][i].lifted);
 	if (unamb[0] && unamb[1]) return 0;
 	if (!unamb[0] && !unamb[1]) return 1;
 	s = unamb[0] ? 1 : 0; t = 1 - s;

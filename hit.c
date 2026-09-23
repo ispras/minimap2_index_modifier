@@ -492,6 +492,13 @@ void mm_set_mapq2(void *km, int n_regs, mm_reg1_t *regs, int min_chain_sc, int m
 				float x, identity = (float)r->mlen / r->blen;
 				if (is_sr && is_splice)
 					x = (float)r->p->dp_max2 / r->p->dp_max; // ignore chaining score; for short RNA-seq reads, unspliced chaining score tends to be higher
+				else if (r->lifted)
+					/* --lift: a contig candidate's chaining score is not comparable
+					 * with a chromosome candidate's (different sequence, different
+					 * minimizer sampling, and never part of a fragment chain), so the
+					 * chain-score ratio is dropped and only the DP ratio is used;
+					 * otherwise subsc/score0 > 1 turns a 28-point DP win into mapq 1. */
+					x = (float)r->p->dp_max2 / r->p->dp_max;
 				else
 					x = (float)r->p->dp_max2 * subsc / r->p->dp_max / r->score0;
 				mapq = (int)(identity * pen_cm * q_coef * (1.0f - x * x) * logf((float)r->p->dp_max / match_sc));
