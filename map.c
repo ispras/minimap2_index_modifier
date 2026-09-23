@@ -749,7 +749,7 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 		 * rule and mapq, so the rule compares exact base coordinates */
 		if (do_lift && mm_lift_regs(mi, n_regs0, regs0) > 0 && do_shift)
 			for (i = 0; i < n_regs0; ++i) if (regs0[i].lifted) mm_lift_refresh(mi, qlens[0], seqs[0], &regs0[i]);
-		regs0 = mmq_rule_and_mapq(mi, opt, b->km, &n_regs0, regs0, rep_len, is_sr, is_sr_rna, is_splice, 0, 1);
+		regs0 = mmq_rule_and_mapq(mi, opt, b->km, &n_regs0, regs0, rep_len, is_sr, is_sr_rna, is_splice, 0, !(opt->flag & MM_F_NO_MAPQ_RULE));
 		n_regs[0] = n_regs0, regs[0] = regs0;
 	} else { // multi-segment
 		mm_seg_t *seg;
@@ -768,7 +768,7 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 			}
 		}
 		for (i = 0; i < n_segs; ++i)
-			regs[i] = mmq_rule_and_mapq(mi, opt, b->km, &n_regs[i], regs[i], rep_len, is_sr, is_sr_rna, is_splice, 1, 1);
+			regs[i] = mmq_rule_and_mapq(mi, opt, b->km, &n_regs[i], regs[i], rep_len, is_sr, is_sr_rna, is_splice, 1, !(opt->flag & MM_F_NO_MAPQ_RULE));
 		mm_seg_free(b->km, n_segs, seg);
 		if (n_segs == 2 && opt->pe_ori >= 0 && (opt->flag&MM_F_CIGAR)) {
 			if (opt->flag & MM_F_MATE_RESOLVE)

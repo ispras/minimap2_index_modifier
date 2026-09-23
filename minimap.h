@@ -53,6 +53,7 @@
 #define MM_F_LIFT          (0x80000000000LL) // project augmentation-contig placements onto the base reference BEFORE the mapq rule
 #define MM_F_MATE_RESOLVE  (0x100000000000LL) // an unambiguous mate prunes the other end's candidates before mapq; no 0.2/0.8 blend in mm_pair()
 #define MM_F_LIFT_NOSHIFT  (0x200000000000LL) // (rollback only) skip indel left-shift and NM refresh after projection
+#define MM_F_NO_MAPQ_RULE  (0x400000000000LL) // (control only) skip the fork's candidate-collapsing rule entirely, as in the production image
 
 #define MM_I_HPC          0x1
 #define MM_I_NO_SEQ       0x2
