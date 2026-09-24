@@ -1122,90 +1122,86 @@ void mm_lift_refresh(const mm_idx_t *mi, int qlen, const char *qstr, mm_reg1_t *
 	free(qbuf);
 }
 
-/* Score a packed CIGAR against (qseq, tseq) with minimap2's scheme: matrix for
- * M, dual-affine gap cost min(q+e*L, q2+e2*L) for I/D, clipping free. */
-static int32_t lift_score_cigar(const uint32_t *cig, int32_t n, const uint8_t *qseq, const uint8_t *tseq, const int8_t *mat, const mm_mapopt_t *opt)
-{
-	int32_t k, qo = 0, to = 0, s = 0;
-	for (k = 0; k < n; ++k) {
-		int op = cig[k]&0xf, l = cig[k]>>4, i;
-		if (op == MM_CIGAR_MATCH) { for (i = 0; i < l; ++i) s += mat[tseq[to+i]*5 + qseq[qo+i]]; qo += l, to += l; }
-		else if (op == MM_CIGAR_INS || op == MM_CIGAR_DEL) {
-			int32_t g1 = opt->q + opt->e * l, g2 = opt->q2 + opt->e2 * l;
-			s -= g1 < g2 ? g1 : g2;
-			if (op == MM_CIGAR_INS) qo += l; else to += l;
-		}
-	}
-	return s;
-}
-
-/* --lift-realign.  The projection says WHERE the read belongs; the CIGAR should
- * say what the READ supports.  A read that runs past the contig's 100 bp flank
- * is soft-clipped on the contig (33 % of lifted reads on chr3 carried a clip
- * against 2 % background), and a read whose allele differs in length from the
- * panel's ALT is forced into the panel's indel.  So: global DP of the whole
- * read against the base window [rs - clip - slack, re + clip + slack], and the
- * result replaces the projected CIGAR only when it scores no worse against the
- * base than the projected one (clipped bases count 0 for both).  dp_score /
- * dp_max stay as scored (the ALT hypothesis); mapq is computed later.
- * Returns 1 if the CIGAR was replaced, 0 otherwise. */
+/* --lift-realign.  The projection says WHERE the read belongs; the read's own
+ * bases say how its ENDS align.  A read that runs past the contig's 100 bp
+ * flank is soft-clipped on the contig (33 % of lifted reads on chr3 carried a
+ * clip against 2 % background), and that clipped evidence is lost.  So, exactly
+ * as mm_align1() does for every alignment, extend both clipped ends against
+ * the base sequence with the same extension DP (end_bonus, zdrop, band) and
+ * splice the result onto the projected CIGAR.  The middle is left as
+ * projected: it is already the DP of the read against the allele it matched.
+ * dp_score / dp_max stay as scored (the ALT hypothesis).  Returns the number
+ * of ends extended (0..2). */
 int mm_lift_realign(void *km, const mm_mapopt_t *opt, const mm_idx_t *mi, int qlen, const char *qstr, mm_reg1_t *r)
 {
 	extern unsigned char seq_nt4_table[256];
-	const mm_lift_t *lt = (const mm_lift_t*)mi->lift;
-	const mm_lift_rec_t *rec;
 	int8_t mat[25];
 	uint8_t *qseq, *tseq;
-	int32_t clip_l, clip_r, slack, i, tlen, lead_d = 0, tail_d = 0, lead_i = 0, tail_i = 0, n, k, sc_new, sc_old, qo, seqlen;
-	int64_t ws, we;
+	int32_t clip_l, clip_r, i, seqlen, bw, n_ext = 0, tl, tr;
+	uint32_t *left = 0, n_left = 0;
 	ksw_extz_t ez;
-	uint32_t *cig;
-	if (r->p == NULL || r->p->n_cigar == 0 || !r->lifted || lt == NULL || r->lift_rid < 0 || r->lift_rid >= lt->n) return 0;
-	rec = &lt->a[r->lift_rid];
-	if (rec->base_rid < 0) return 0;
+	if (r->p == NULL || r->p->n_cigar == 0 || !r->lifted) return 0;
 	seqlen = (int32_t)mi->seq[r->rid].len;
 	clip_l = r->rev ? qlen - r->qe : r->qs;     /* clipping in CIGAR (reference) order */
 	clip_r = r->rev ? r->qs : qlen - r->qe;
-	slack = (rec->ins_len > rec->del_len ? rec->ins_len : rec->del_len) + 16;
-	ws = (int64_t)r->rs - clip_l - slack; if (ws < 0) ws = 0;
-	we = (int64_t)r->re + clip_r + slack; if (we > seqlen) we = seqlen;
-	tlen = (int32_t)(we - ws);
-	if (tlen <= 0 || tlen > 4 * qlen + 256) return 0;
-	qseq = (uint8_t*)kmalloc(km, qlen + tlen);
+	if (clip_l <= 0 && clip_r <= 0) return 0;
+	tl = clip_l > 0 && r->rs > 0 ? (clip_l * 2 + 16 < r->rs ? clip_l * 2 + 16 : r->rs) : 0;
+	tr = clip_r > 0 && r->re < seqlen ? (clip_r * 2 + 16 < seqlen - r->re ? clip_r * 2 + 16 : seqlen - r->re) : 0;
+	if (tl <= 0 && tr <= 0) return 0;
+	qseq = (uint8_t*)kmalloc(km, qlen + tl + tr + 1);
 	tseq = qseq + qlen;
 	if (!r->rev) for (i = 0; i < qlen; ++i) qseq[i] = seq_nt4_table[(uint8_t)qstr[i]];
 	else for (i = 0; i < qlen; ++i) { uint8_t c = seq_nt4_table[(uint8_t)qstr[qlen - 1 - i]]; qseq[i] = c < 4 ? 3 - c : 4; }
-	mm_idx_getseq(mi, r->rid, (uint32_t)ws, (uint32_t)we, tseq);
 	ksw_gen_ts_mat(5, mat, opt->a, opt->b, opt->transition, opt->sc_ambi);
+	bw = (int)(opt->bw * 1.5 + 1.);
 	memset(&ez, 0, sizeof ez);
-	if (opt->q == opt->q2 && opt->e == opt->e2)
-		ksw_extz2_sse(km, qlen, qseq, tlen, tseq, 5, mat, opt->q, opt->e, tlen, -1, 0, 0, &ez);
-	else
-		ksw_extd2_sse(km, qlen, qseq, tlen, tseq, 5, mat, opt->q, opt->e, opt->q2, opt->e2, tlen, -1, 0, 0, &ez);
-	if (ez.n_cigar == 0) { kfree(km, ez.cigar); kfree(km, qseq); return 0; }
-	/* trim terminal D (window slack) and turn terminal I into clipping */
-	cig = ez.cigar; n = ez.n_cigar; k = 0;
-	while (k < n && ((cig[k]&0xf) == MM_CIGAR_DEL || (cig[k]&0xf) == MM_CIGAR_INS)) { if ((cig[k]&0xf) == MM_CIGAR_DEL) lead_d += cig[k]>>4; else lead_i += cig[k]>>4; ++k; }
-	while (n > k && ((cig[n-1]&0xf) == MM_CIGAR_DEL || (cig[n-1]&0xf) == MM_CIGAR_INS)) { if ((cig[n-1]&0xf) == MM_CIGAR_DEL) tail_d += cig[n-1]>>4; else tail_i += cig[n-1]>>4; --n; }
-	if (n <= k) { kfree(km, ez.cigar); kfree(km, qseq); return 0; }
-	/* score the new alignment and the projected one against the same base window */
-	sc_new = lift_score_cigar(cig + k, n - k, qseq + lead_i, tseq + lead_d, mat, opt);
-	qo = clip_l;                                              /* projected CIGAR starts at query offset clip_l, target offset rs - ws */
-	sc_old = lift_score_cigar(r->p->cigar, (int32_t)r->p->n_cigar, qseq + qo, tseq + (r->rs - ws), mat, opt);
-	if (sc_new < sc_old) { kfree(km, ez.cigar); kfree(km, qseq); return 0; }
-	{	/* write back: CIGAR, coordinates, clipping in forward-read order */
-		uint32_t need = (uint32_t)(n - k) + sizeof(mm_extra_t)/4;
-		if (need > r->p->capacity) { uint32_t ncap = need; kroundup32(ncap); r->p = (mm_extra_t*)realloc(r->p, (size_t)ncap * 4); r->p->capacity = ncap; }
-		memcpy(r->p->cigar, cig + k, (size_t)(n - k) * 4);
-		r->p->n_cigar = (uint32_t)(n - k);
-		r->rs = (int32_t)(ws + lead_d);
-		r->re = r->rs + (int32_t)mm_lift_ref_span(r->p->cigar, (int32_t)r->p->n_cigar);
-		if (!r->rev) r->qs = lead_i, r->qe = qlen - tail_i;
-		else         r->qs = tail_i, r->qe = qlen - lead_i;
-		r->p->dp_score = r->p->dp_score; /* hypothesis scores untouched */
+	if (tl > 0) {	/* left end: reverse both and extend, as mm_align1() does */
+		mm_idx_getseq(mi, r->rid, (uint32_t)(r->rs - tl), (uint32_t)r->rs, tseq);
+		mm_seq_rev((uint32_t)clip_l, qseq);
+		mm_seq_rev((uint32_t)tl, tseq);
+		mm_align_pair(km, opt, clip_l, qseq, tl, tseq, 0, mat, bw, opt->end_bonus, opt->zdrop, KSW_EZ_EXTZ_ONLY|KSW_EZ_RIGHT|KSW_EZ_REV_CIGAR, &ez);
+		mm_seq_rev((uint32_t)clip_l, qseq);
+		if (ez.n_cigar > 0) {
+			int32_t dt = ez.reach_end ? ez.mqe_t + 1 : ez.max_t + 1;
+			int32_t dq = ez.reach_end ? clip_l : ez.max_q + 1;
+			n_left = ez.n_cigar; left = (uint32_t*)kmalloc(km, n_left * 4); memcpy(left, ez.cigar, n_left * 4);
+			r->rs -= dt; clip_l -= dq; ++n_ext;
+		}
+		kfree(km, ez.cigar); memset(&ez, 0, sizeof ez);
 	}
-	kfree(km, ez.cigar); kfree(km, qseq);
-	return 1;
+	if (tr > 0) {	/* right end */
+		mm_idx_getseq(mi, r->rid, (uint32_t)r->re, (uint32_t)(r->re + tr), tseq);
+		mm_align_pair(km, opt, clip_r, qseq + (qlen - clip_r), tr, tseq, 0, mat, bw, opt->end_bonus, opt->zdrop, KSW_EZ_EXTZ_ONLY, &ez);
+		if (ez.n_cigar > 0) {
+			int32_t dt = ez.reach_end ? ez.mqe_t + 1 : ez.max_t + 1;
+			int32_t dq = ez.reach_end ? clip_r : ez.max_q + 1;
+			mm_append_cigar(r, ez.n_cigar, ez.cigar);
+			r->re += dt; clip_r -= dq; ++n_ext;
+		}
+		kfree(km, ez.cigar);
+	}
+	if (n_left > 0) {	/* prepend the left extension (its CIGAR is already in forward order) */
+		uint32_t n_old = r->p->n_cigar, k;
+		mm_enlarge_cigar(r, n_left);
+		memmove(r->p->cigar + n_left, r->p->cigar, n_old * 4);
+		memcpy(r->p->cigar, left, n_left * 4);
+		r->p->n_cigar = n_old + n_left;
+		kfree(km, left);
+		/* merge the boundary op if identical */
+		for (k = 1; k < r->p->n_cigar; ++k)
+			if ((r->p->cigar[k]&0xf) == (r->p->cigar[k-1]&0xf)) {
+				r->p->cigar[k-1] += r->p->cigar[k]>>4<<4;
+				memmove(r->p->cigar + k, r->p->cigar + k + 1, (r->p->n_cigar - k - 1) * 4);
+				--r->p->n_cigar; --k;
+			}
+	}
+	if (n_ext > 0) {
+		if (!r->rev) r->qs = clip_l, r->qe = qlen - clip_r;
+		else         r->qs = clip_r, r->qe = qlen - clip_l;
+		r->re = r->rs + (int32_t)mm_lift_ref_span(r->p->cigar, (int32_t)r->p->n_cigar);
+	}
+	kfree(km, qseq);
+	return n_ext;
 }
 
 mm_reg1_t *mm_align_skeleton(void *km, const mm_mapopt_t *opt, const mm_idx_t *mi, int qlen, const char *qstr, int *n_regs_, mm_reg1_t *regs, mm128_t *a)
