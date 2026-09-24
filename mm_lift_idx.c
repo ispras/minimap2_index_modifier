@@ -26,7 +26,8 @@ int mm_lift_build(mm_idx_t *mi, const char *fn_map, int32_t jct, int64_t *n_unre
 	size_t n;
 	int32_t i;
 	int64_t n_ok = 0, n_bad = 0;
-	int32_t *delta = NULL, *ins3 = NULL, *del3 = NULL;
+	int64_t n_jct4 = 0;   /* contigs whose junction came from the sidecar */
+	int32_t *delta = NULL, *ins3 = NULL, *del3 = NULL, *jct4 = NULL;
 
 	if (mi == NULL || mi->n_seq == 0 || jct <= 0) return -1;
 	n = (size_t)mi->n_seq;
@@ -42,7 +43,8 @@ int mm_lift_build(mm_idx_t *mi, const char *fn_map, int32_t jct, int64_t *n_unre
 	delta = (int32_t*)calloc(n, sizeof(int32_t));
 	ins3  = (int32_t*)calloc(n, sizeof(int32_t));
 	del3  = (int32_t*)calloc(n, sizeof(int32_t));
-	if (lt->a == NULL || delta == NULL || ins3 == NULL || del3 == NULL) { free(delta); free(ins3); free(del3); free(lt->a); free(lt); return -1; }
+	jct4  = (int32_t*)calloc(n, sizeof(int32_t));   /* 0 = not supplied: fall back to the --lift-junction value */
+	if (lt->a == NULL || delta == NULL || ins3 == NULL || del3 == NULL || jct4 == NULL) { free(delta); free(ins3); free(del3); free(jct4); free(lt->a); free(lt); return -1; }
 	for (i = 0; i < lt->n; ++i) delta[i] = INT32_MIN;   /* "not supplied" */
 
 	if (fn_map != NULL) {
@@ -50,7 +52,7 @@ int mm_lift_build(mm_idx_t *mi, const char *fn_map, int32_t jct, int64_t *n_unre
 		char buf[1024];
 		if (fp == NULL) {
 			fprintf(stderr, "[ERROR] --lift-map: cannot open %s\n", fn_map);
-			free(delta); free(ins3); free(del3); free(lt->a); free(lt);
+			free(delta); free(ins3); free(del3); free(jct4); free(lt->a); free(lt);
 			return -1;
 		}
 		while (fgets(buf, sizeof buf, fp)) {
@@ -65,11 +67,16 @@ int mm_lift_build(mm_idx_t *mi, const char *fn_map, int32_t jct, int64_t *n_unre
 			tab2 = (*end == '\t') ? end : NULL;
 			if (tab2 == NULL) {
 				delta[id] = (int32_t)v1;                 /* two columns: d = |ALT|-|REF| */
-			} else {                                     /* three columns: ins_len, del_len */
-				v2 = strtol(tab2 + 1, NULL, 10);
+			} else {                                     /* three columns: ins_len, del_len; optional fourth: junction */
+				char *end2;
+				v2 = strtol(tab2 + 1, &end2, 10);
 				ins3[id] = (int32_t)v1;
 				del3[id] = (int32_t)v2;
 				delta[id] = INT32_MIN + 1;               /* marker: explicit pair supplied */
+				if (*end2 == '\t') {                     /* fourth column: jct = left flank + 1 (block A length), per contig */
+					long v3 = strtol(end2 + 1, NULL, 10);
+					if (v3 > 0) { jct4[id] = (int32_t)v3; ++n_jct4; }
+				}
 			}
 		}
 		fclose(fp);
@@ -92,13 +99,20 @@ int mm_lift_build(mm_idx_t *mi, const char *fn_map, int32_t jct, int64_t *n_unre
 		nm[chrom_len] = save;
 		if (base_id < 0) { ++n_bad; continue; }
 
-		/* a contig closer than jct-1 to the chromosome start has a shortened
-		 * left flank: the generator takes lf = min(flank, pos-1), so the
-		 * junction is min(jct, pos) and off_a is then 0 */
-		jct_i = pos < jct ? (int32_t)pos : jct;
+		/* junction: from the sidecar's fourth column when present (per contig,
+		 * so a shortened flank at a chromosome start or a different flank
+		 * length need no command-line knowledge); otherwise from
+		 * --lift-junction, where a contig closer than jct-1 to the chromosome
+		 * start has a shortened left flank (the generator takes
+		 * lf = min(flank, pos-1)), so the junction is min(jct, pos) */
+		if (jct4[i] > 0) {
+			jct_i = jct4[i];
+			if ((int64_t)jct_i > pos || jct_i >= (int32_t)mi->seq[i].len) { ++n_bad; continue; }   /* impossible geometry */
+		} else jct_i = pos < jct ? (int32_t)pos : jct;
 		d = delta[i];
 		if (d == INT32_MIN + 1) {                        /* explicit (ins_len, del_len) */
 			if (ins3[i] < 0 || del3[i] < 0 || (ins3[i] == 0 && del3[i] == 0)) { ++n_bad; continue; }
+			if (jct4[i] > 0 && jct_i + ins3[i] >= (int32_t)mi->seq[i].len) { ++n_bad; continue; }   /* no block B left */
 			lt->a[i].base_rid = base_id;
 			lt->a[i].jct      = jct_i;
 			lt->a[i].off_a    = pos - jct_i;
@@ -131,6 +145,7 @@ int mm_lift_build(mm_idx_t *mi, const char *fn_map, int32_t jct, int64_t *n_unre
 	mm_lift_destroy((mm_lift_t*)mi->lift);
 	mi->lift = (struct mm_lift_s*)lt;
 	if (n_unresolved) *n_unresolved = n_bad;
+	lt->n_jct_from_map = n_jct4;
 	return (int)n_ok;
 }
 

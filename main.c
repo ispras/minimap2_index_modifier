@@ -398,7 +398,8 @@ int main(int argc, char *argv[])
 		fprintf(fp_help, "    --vcf-file-with-variants FILE      pass VCF FILE to modify index []\n");
 		fprintf(fp_help, "    --lift             emit base-reference coordinates for augmentation-contig\n");
 		fprintf(fp_help, "                       placements (no external liftover)\n");
-		fprintf(fp_help, "    --lift-map FILE    TSV of <contig name>\\t<|ALT|-|REF|> for --lift\n");
+		fprintf(fp_help, "    --lift-map FILE    sidecar TSV for --lift: <contig>\\t<ins_len>\\t<del_len>[\\t<jct>] (or <contig>\\t<|ALT|-|REF|>)\n");
+		fprintf(fp_help, "    --lift-junction INT fallback junction (left flank + 1) for sidecar lines without the 4th column [101]\n");
 		fprintf(fp_help, "    --lift-noshift     (rollback only) no indel left-shift / NM refresh after --lift\n");
 		fprintf(fp_help, "    --no-mapq-rule     (control only) no candidate-collapsing rule at all, as in the production image\n");
 		fprintf(fp_help, "    --lift-realign     after --lift, re-derive each lifted read's CIGAR against the base as mm_align1 does:\n");
@@ -489,8 +490,8 @@ int main(int argc, char *argv[])
 				mm_idx_destroy(mi); mm_idx_reader_close(idx_rdr); return 1;
 			}
 			if (mm_verbose >= 3)
-				fprintf(stderr, "[M::%s] --lift: %d of %u sequences projectable, %ld unresolved\n",
-						__func__, n_lift, mi->n_seq, (long)n_unres);
+				fprintf(stderr, "[M::%s] --lift: %d of %u sequences projectable, %ld unresolved, junction from the sidecar for %ld\n",
+						__func__, n_lift, mi->n_seq, (long)n_unres, (long)(mi->lift? mi->lift->n_jct_from_map : 0));
 		}
 		if ((opt.flag & MM_F_CIGAR) && (mi->flag & MM_I_NO_SEQ)) {
 			fprintf(stderr, "[ERROR] the prebuilt index doesn't contain sequences.\n");

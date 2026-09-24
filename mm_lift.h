@@ -114,6 +114,7 @@ typedef struct {
 typedef struct mm_lift_s {
 	int32_t n;
 	mm_lift_rec_t *a;
+	int64_t n_jct_from_map;   /* contigs whose junction came from the sidecar (4th column) */
 } mm_lift_t;
 
 /* off_b: base-reference coordinate of contig offset 0 *for block B*.
@@ -273,12 +274,18 @@ int mm_lift_cigar(const mm_lift_rec_t *rec, int32_t ctg_len,
  *   - A contig whose chromosome prefix does not name a sequence in the index
  *     also gets base_rid = -1, and is counted as unresolved: it cannot be
  *     projected, so it is left alone rather than projected wrongly.
- *   - off_a = pos - jct, jct as given (101 for this reference build).
+ *   - off_a = pos - jct.  jct (the length of block A = left flank + anchor
+ *     base) comes from the sidecar's optional FOURTH column, per contig; only
+ *     when that column is absent is the --lift-junction value used (with
+ *     min(jct, pos) at a chromosome start).  A sidecar built from the
+ *     generator's geometry (mkliftmap_all.py) always carries the column, so
+ *     a different flank length needs no command-line knowledge.
  *   - ins_len/del_len come from the signed delta d = |ALT| - |REF|:
  *       d > 0 -> ins_len = d,  del_len = 0
  *       d < 0 -> ins_len = 0,  del_len = -d
  *     d is read from fn_map, a TSV with either two columns
  *     "<contig name>\t<d>" or three columns "<contig name>\t<ins_len>\t<del_len>"
+ *     (plus the optional fourth column "<jct>", see above)
  *     (the three-column form is required for complex records where both
  *     |REF| > 1 and |ALT| > 1, which a single delta cannot express).  For a
  *     contig absent from the file, d is inferred as len-201 when that is >= 4
