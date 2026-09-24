@@ -143,6 +143,7 @@ mm_seg_t *mm_seg_gen(void *km, uint32_t hash, int n_segs, const int *qlens, int 
 void mm_seg_free(void *km, int n_segs, mm_seg_t *segs);
 void mm_pair(void *km, int max_gap_ref, int dp_bonus, int sub_diff, int match_sc, const int *qlens, int *n_regs, mm_reg1_t **regs, int no_blend);
 void mm_lift_refresh(const mm_idx_t *mi, int qlen, const char *qstr, mm_reg1_t *r, int what);
+int mm_lift_realign(void *km, const mm_mapopt_t *opt, const mm_idx_t *mi, int qlen, const char *qstr, mm_reg1_t *r);
 
 FILE *mm_split_init(const char *prefix, const mm_idx_t *mi);
 mm_idx_t *mm_split_merge_prep(const char *prefix, int n_splits, FILE **fp, uint32_t *n_seq_part);

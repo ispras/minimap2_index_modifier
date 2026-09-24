@@ -780,8 +780,11 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 		regs0 = (mm_reg1_t*)realloc(regs0, sizeof(*regs0) * n_regs0);
 		/* project contig placements onto the base reference BEFORE the locus
 		 * rule and mapq, so the rule compares exact base coordinates */
-		if (do_lift && mm_lift_regs(mi, n_regs0, regs0) > 0 && do_shift)
-			for (i = 0; i < n_regs0; ++i) if (regs0[i].lifted) mm_lift_refresh(mi, qlens[0], seqs[0], &regs0[i], 1);
+		if (do_lift && mm_lift_regs(mi, n_regs0, regs0) > 0)
+			for (i = 0; i < n_regs0; ++i) if (regs0[i].lifted) {
+				if (opt->flag & MM_F_LIFT_REALIGN) mm_lift_realign(b->km, opt, mi, qlens[0], seqs[0], &regs0[i]);
+				if (do_shift) mm_lift_refresh(mi, qlens[0], seqs[0], &regs0[i], 1);
+			}
 		regs0 = mmq_rule_and_mapq(mi, opt, b->km, &n_regs0, regs0, rep_len, is_sr, is_sr_rna, is_splice, 0, !(opt->flag & MM_F_NO_MAPQ_RULE));
 		if (do_shift) /* NM against the base, after mapq (which used the contig identity) */
 			for (i = 0; i < n_regs0; ++i) if (regs0[i].lifted) mm_lift_refresh(mi, qlens[0], seqs[0], &regs0[i], 2);
@@ -797,9 +800,12 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 			/* project BEFORE the locus rule (exact coordinates) and BEFORE
 			 * pairing (a read on a contig and its mate on the chromosome carry
 			 * different rids until this runs) */
-			if (do_lift && mm_lift_regs(mi, n_regs[i], regs[i]) > 0 && do_shift) {
+			if (do_lift && mm_lift_regs(mi, n_regs[i], regs[i]) > 0) {
 				int z;
-				for (z = 0; z < n_regs[i]; ++z) if (regs[i][z].lifted) mm_lift_refresh(mi, qlens[i], seqs[i], &regs[i][z], 1);
+				for (z = 0; z < n_regs[i]; ++z) if (regs[i][z].lifted) {
+					if (opt->flag & MM_F_LIFT_REALIGN) mm_lift_realign(b->km, opt, mi, qlens[i], seqs[i], &regs[i][z]);
+					if (do_shift) mm_lift_refresh(mi, qlens[i], seqs[i], &regs[i][z], 1);
+				}
 			}
 		}
 		for (i = 0; i < n_segs; ++i)
