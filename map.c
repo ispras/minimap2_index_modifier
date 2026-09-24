@@ -588,7 +588,11 @@ static int mmq_tie_to_base(const mm_idx_t *mi, const mm_mapopt_t *opt, int n_reg
 		regs[k].id = regs[0].id; regs[0].id = id0;
 		regs[0].parent = regs[k].parent = 0;
 	}
-	regs[0].sam_pri = 1;   /* the survivor is the primary record; the dropped contig hit carried that bit before */
+	for (i = 1; i < n_regs; ++i) regs[i].sam_pri = 0;   /* exactly one primary: the former one may be a base record that stays (moved to k) */
+	regs[0].sam_pri = 1;   /* the survivor is the primary record */
+	if (mm_dbg_flag & MM_DBG_PRINT_QNAME)
+		for (i = 0; i < n_regs; ++i)
+			fprintf(stderr, "TB\tafter %d\tid %d\tparent %d\tsam_pri %d\tlifted %d\tmark %s\n", i, regs[i].id, regs[i].parent, regs[i].sam_pri, regs[i].lifted, chrs_to_drop[i] ? chrs_to_drop[i] : "-");
 	return 1;
 }
 
@@ -1139,6 +1143,14 @@ static void *worker_pipeline(void *shared, int step, void *in)
 				} else if (s->n_reg[i] > 0) { // the query has at least one hit
 					for (j = 0; j < s->n_reg[i]; ++j) {
 						const mm_reg1_t *r = &s->reg[i][j];
+						if (r->sam_pri && r->id != r->parent) {   /* diagnostic before the assertion: which read, which records */
+							int jj;
+							fprintf(stderr, "[PRI-BUG] %s n_reg=%d\n", t->name, s->n_reg[i]);
+							for (jj = 0; jj < s->n_reg[i]; ++jj) {
+								const mm_reg1_t *q = &s->reg[i][jj];
+								fprintf(stderr, "[PRI-BUG]   [%d] id=%d parent=%d sam_pri=%d lifted=%d tb=%d rid=%d rs=%d re=%d rev=%d mapq=%d dp=%d\n", jj, q->id, q->parent, q->sam_pri, q->lifted, q->tie_base, q->rid, q->rs, q->re, q->rev, q->mapq, q->p? q->p->dp_score : -1);
+							}
+						}
 						assert(!r->sam_pri || r->id == r->parent);
 						if ((p->opt->flag & MM_F_NO_PRINT_2ND) && r->id != r->parent)
 							continue;
