@@ -139,6 +139,19 @@ static inline int64_t mm_lift_ref_span(const uint32_t *cigar, int32_t n)
 	return s;
 }
 
+/* Query-consuming span of a packed CIGAR (M/I/=/X), the counterpart of
+ * mm_lift_ref_span; mm_lift_realign checks the derived CIGAR against it. */
+static inline int64_t mm_lift_query_span(const uint32_t *cigar, int32_t n)
+{
+	int64_t s = 0; int32_t i;
+	for (i = 0; i < n; ++i) {
+		int op = cigar[i] & 0xf;
+		if (op == 0 || op == 1 || op == 7 || op == 8)
+			s += cigar[i] >> 4;
+	}
+	return s;
+}
+
 /* Zone of a contig offset.  0 = block A, 1 = the novel-ALT gap, 2 = block B. */
 #define MM_LIFT_ZONE_A   0
 #define MM_LIFT_ZONE_INS 1

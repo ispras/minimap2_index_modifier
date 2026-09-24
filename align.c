@@ -1122,17 +1122,161 @@ void mm_lift_refresh(const mm_idx_t *mi, int qlen, const char *qstr, mm_reg1_t *
 	free(qbuf);
 }
 
-/* --lift-realign.  The projection says WHERE the read belongs; the read's own
- * bases say how its ENDS align.  A read that runs past the contig's 100 bp
- * flank is soft-clipped on the contig (33 % of lifted reads on chr3 carried a
- * clip against 2 % background), and that clipped evidence is lost.  So, exactly
- * as mm_align1() does for every alignment, extend both clipped ends against
- * the base sequence with the same extension DP (end_bonus, zdrop, band) and
- * splice the result onto the projected CIGAR.  The middle is left as
- * projected: it is already the DP of the read against the allele it matched.
- * dp_score / dp_max stay as scored (the ALT hypothesis).  Returns the number
- * of ends extended (0..2). */
-int mm_lift_realign(void *km, const mm_mapopt_t *opt, const mm_idx_t *mi, int qlen, const char *qstr, mm_reg1_t *r)
+/* --lift-realign.  The projection says WHERE the read belongs; how the read's
+ * bases align there is re-derived from the read itself against the base, in
+ * two parts, the way mm_align1() builds every short-read alignment:
+ *
+ *  1. MIDDLE (mm_lift_realign_mid): between the first and the last exact-match
+ *     anchor (runs of >= MM_LIFT_MIN_ANCHOR identical bases) of the projected
+ *     alignment, the CIGAR is re-derived by GLOBAL DP against the base with
+ *     both ends fixed on the anchors.  Global, not fitting: a long panel
+ *     deletion between the anchors must be crossed in full, so the DP cannot
+ *     trade it for a cheaper clip or a run of insertions (that was v3's
+ *     failure on EDGEX: 10I77D became 2I2M20I2M).  A read whose allele differs
+ *     from the panel (I8 in a tandem where the contig carries I12, projected
+ *     as I12+D4) thus gets its own I8; a read that carries the panel allele
+ *     gets the same indel back.  The new middle replaces the projected one
+ *     iff its standard score against the base is not lower; an indel wider
+ *     than the band keeps the projection.  Outside the anchors the projected
+ *     ops are kept: there the read has no exact support, and the projection
+ *     (the contig's evidence) is all there is.
+ *  2. ENDS (mm_lift_extend_ends, the former v2): a clipped end (the read ran
+ *     past the contig's 100 bp flank) is extended against the base with the
+ *     same extension DP (end_bonus, zdrop, band).
+ *
+ * dp_score / dp_max stay as scored (the ALT hypothesis).  Returns a bit mask:
+ * 1 = middle replaced, 2 = an end extended. */
+static int32_t mm_lift_cigar_score(const mm_mapopt_t *opt, const uint32_t *cigar, int32_t n_cigar, const uint8_t *q, const uint8_t *t)
+{
+	int32_t s = 0, qo = 0, to = 0, amb = opt->sc_ambi > 0? -opt->sc_ambi : opt->sc_ambi, k;
+	uint32_t l;
+	for (k = 0; k < n_cigar; ++k) {
+		uint32_t op = cigar[k]&0xf, len = cigar[k]>>4;
+		if (op == MM_CIGAR_MATCH) {
+			for (l = 0; l < len; ++l) {
+				uint8_t cq = q[qo + l], ct = t[to + l];
+				s += (cq > 3 || ct > 3)? amb : cq == ct? opt->a : -opt->b;
+			}
+			qo += len, to += len;
+		} else if (op == MM_CIGAR_INS || op == MM_CIGAR_DEL) {
+			int32_t g1 = opt->q + opt->e * (int32_t)len, g2 = opt->q2 + opt->e2 * (int32_t)len;
+			s -= g1 < g2? g1 : g2;
+			if (op == MM_CIGAR_INS) qo += len; else to += len;
+		} else if (op == MM_CIGAR_N_SKIP) to += len;
+	}
+	return s;
+}
+
+#define MM_LIFT_MIN_ANCHOR 15   /* shortest exact run that may anchor the middle re-derivation */
+
+static int mm_lift_realign_mid(void *km, const mm_mapopt_t *opt, const mm_idx_t *mi, int qlen, const char *qstr, mm_reg1_t *r)
+{
+	extern unsigned char seq_nt4_table[256];
+	int8_t mat[25];
+	uint8_t *qseq, *tseq;
+	int32_t clip_l, i, seqlen, bw, l_t, l_q, ret = 0;
+	int32_t qo, to, run, n_anchor = 0, has_gap = 0;
+	int32_t qa = 0, ta = 0, qb = 0, tb = 0;   /* [qa,qb) x [ta,tb): first anchor start .. last anchor end, alignment-relative */
+	int32_t sc_new, sc_old, n_head = 0, n_mid = 0, n_tail = 0, n_old = 0;
+	uint32_t *head = 0, *mid = 0, *tail = 0, *old = 0, k;
+	int m_head = 0, m_mid = 0, m_tail = 0, m_old = 0;
+	ksw_extz_t ez;
+	mm_extra_t *p = r->p;
+	if (p == NULL || p->n_cigar == 0 || !r->lifted) return 0;
+	seqlen = (int32_t)mi->seq[r->rid].len;
+	l_q = r->qe - r->qs; l_t = r->re - r->rs;
+	if (l_q <= 0 || l_t <= 0 || r->rs < 0 || r->re > seqlen) return 0;
+	clip_l = r->rev? qlen - r->qe : r->qs;     /* clipping in CIGAR (reference) order */
+	memset(&ez, 0, sizeof ez);
+	qseq = (uint8_t*)kmalloc(km, l_q + l_t);
+	tseq = qseq + l_q;
+	if (!r->rev) for (i = 0; i < l_q; ++i) qseq[i] = seq_nt4_table[(uint8_t)qstr[clip_l + i]];
+	else for (i = 0; i < l_q; ++i) { uint8_t c = seq_nt4_table[(uint8_t)qstr[qlen - 1 - clip_l - i]]; qseq[i] = c < 4? 3 - c : 4; }
+	mm_idx_getseq(mi, r->rid, (uint32_t)r->rs, (uint32_t)r->re, tseq);
+	/* 1. anchors: first and last exact run of >= MIN bases; is there a gap op between them? */
+	for (k = 0, qo = 0, to = 0; k < p->n_cigar; ++k) {
+		uint32_t op = p->cigar[k]&0xf, len = p->cigar[k]>>4;
+		if (op == MM_CIGAR_MATCH) {
+			for (i = 0, run = 0; i <= (int32_t)len; ++i) {
+				int hit = i < (int32_t)len && qseq[qo + i] < 4 && qseq[qo + i] == tseq[to + i];
+				if (hit) { ++run; continue; }
+				if (run >= MM_LIFT_MIN_ANCHOR) {
+					if (n_anchor == 0) qa = qo + i - run, ta = to + i - run;
+					qb = qo + i, tb = to + i; ++n_anchor;
+				}
+				run = 0;
+			}
+			qo += len, to += len;
+		} else {
+			if (n_anchor > 0 && (op == MM_CIGAR_INS || op == MM_CIGAR_DEL)) has_gap = 1;   /* provisional: a gap after the last anchor is cleared below */
+			if (op == MM_CIGAR_INS) qo += len; else to += len;
+		}
+	}
+	if (n_anchor < 2) { kfree(km, qseq); return 0; }
+	/* split the projected CIGAR into head [0,qa), mid [qa,qb), tail [qb,..) by query/ref offsets; gaps are assigned by their offset */
+	has_gap = 0;
+	for (k = 0, qo = 0, to = 0; k < p->n_cigar; ++k) {
+		uint32_t op = p->cigar[k]&0xf, len = p->cigar[k]>>4;
+		if (op == MM_CIGAR_MATCH) {
+			int32_t s = 0;
+			while (s < (int32_t)len) {
+				int32_t q = qo + s, seg;
+				uint32_t **dst; int *n, *m;
+				if (q < qa) seg = (qa - q < (int32_t)len - s? qa - q : len - s), dst = &head, n = &n_head, m = &m_head;
+				else if (q < qb) seg = (qb - q < (int32_t)len - s? qb - q : len - s), dst = &mid, n = &n_mid, m = &m_mid;
+				else seg = len - s, dst = &tail, n = &n_tail, m = &m_tail;
+				*dst = ksw_push_cigar(km, n, m, *dst, MM_CIGAR_MATCH, seg);
+				s += seg;
+			}
+			qo += len, to += len;
+		} else {
+			int in_mid = op == MM_CIGAR_INS? (qo >= qa && qo < qb) : (to >= ta && to < tb);
+			int in_head = op == MM_CIGAR_INS? qo < qa : to < ta;
+			if (in_mid) { mid = ksw_push_cigar(km, &n_mid, &m_mid, mid, op, len); if (op == MM_CIGAR_INS || op == MM_CIGAR_DEL) has_gap = 1; }
+			else if (in_head) head = ksw_push_cigar(km, &n_head, &m_head, head, op, len);
+			else tail = ksw_push_cigar(km, &n_tail, &m_tail, tail, op, len);
+			if (op == MM_CIGAR_INS) qo += len; else to += len;
+		}
+	}
+	if (!has_gap) goto done;   /* nothing to re-derive: the middle is matches/mismatches only */
+	if ((qb - qa) - (tb - ta) > (int32_t)(opt->bw_long * 1.5) || (tb - ta) - (qb - qa) > (int32_t)(opt->bw_long * 1.5)) goto done;   /* beyond the band: keep the projection */
+	/* 2. global DP of the middle against the base, both ends fixed on the anchors */
+	ksw_gen_ts_mat(5, mat, opt->a, opt->b, opt->transition, opt->sc_ambi);
+	bw = (int)(opt->bw_long * 1.5 + 1.);
+	memset(&ez, 0, sizeof ez);
+	mm_align_pair(km, opt, qb - qa, qseq + qa, tb - ta, tseq + ta, 0, mat, bw, -1, -1, 0, &ez);
+	if (ez.n_cigar == 0 || ez.zdropped) goto done;
+	if ((int32_t)mm_lift_query_span(ez.cigar, ez.n_cigar) != qb - qa || (int32_t)mm_lift_ref_span(ez.cigar, ez.n_cigar) != tb - ta) goto done;
+	sc_old = mm_lift_cigar_score(opt, mid, n_mid, qseq + qa, tseq + ta);
+	sc_new = mm_lift_cigar_score(opt, ez.cigar, ez.n_cigar, qseq + qa, tseq + ta);
+	if (mm_dbg_flag & MM_DBG_PRINT_ALN_SEQ) {
+		fprintf(stderr, "[lift-realign] rid %d rs %d q[%d,%d) t[%d,%d) score %d->%d mid ", r->rid, r->rs, qa, qb, ta, tb, sc_old, sc_new);
+		for (k = 0; k < (uint32_t)n_mid; ++k) fprintf(stderr, "%d%c", mid[k]>>4, MM_CIGAR_STR[mid[k]&0xf]);
+		fprintf(stderr, " -> ");
+		for (k = 0; k < (uint32_t)ez.n_cigar; ++k) fprintf(stderr, "%d%c", ez.cigar[k]>>4, MM_CIGAR_STR[ez.cigar[k]&0xf]);
+		fprintf(stderr, "\n");
+	}
+	if (sc_new < sc_old) goto done;
+	if (ez.n_cigar == n_mid && memcmp(ez.cigar, mid, (size_t)n_mid * 4) == 0) goto done;
+	/* 3. splice head + new mid + tail; the reference span is unchanged by construction */
+	for (k = 0; k < (uint32_t)n_head; ++k) old = ksw_push_cigar(km, &n_old, &m_old, old, head[k]&0xf, head[k]>>4);
+	for (k = 0; k < (uint32_t)ez.n_cigar; ++k) old = ksw_push_cigar(km, &n_old, &m_old, old, ez.cigar[k]&0xf, ez.cigar[k]>>4);
+	for (k = 0; k < (uint32_t)n_tail; ++k) old = ksw_push_cigar(km, &n_old, &m_old, old, tail[k]&0xf, tail[k]>>4);
+	if ((int32_t)mm_lift_ref_span(old, n_old) != l_t || (int32_t)mm_lift_query_span(old, n_old) != l_q) goto done;
+	p->n_cigar = 0;
+	mm_append_cigar(r, (uint32_t)n_old, old);   /* may realloc r->p */
+	ret = 1;
+done:
+	if (ez.cigar) kfree(km, ez.cigar);
+	if (head) kfree(km, head);
+	if (mid) kfree(km, mid);
+	if (tail) kfree(km, tail);
+	if (old) kfree(km, old);
+	kfree(km, qseq);
+	return ret;
+}
+
+static int mm_lift_extend_ends(void *km, const mm_mapopt_t *opt, const mm_idx_t *mi, int qlen, const char *qstr, mm_reg1_t *r)
 {
 	extern unsigned char seq_nt4_table[256];
 	int8_t mat[25];
@@ -1202,6 +1346,15 @@ int mm_lift_realign(void *km, const mm_mapopt_t *opt, const mm_idx_t *mi, int ql
 	}
 	kfree(km, qseq);
 	return n_ext;
+}
+
+
+int mm_lift_realign(void *km, const mm_mapopt_t *opt, const mm_idx_t *mi, int qlen, const char *qstr, mm_reg1_t *r)
+{
+	int ret = 0;
+	if (mm_lift_realign_mid(km, opt, mi, qlen, qstr, r)) ret |= 1;
+	if (mm_lift_extend_ends(km, opt, mi, qlen, qstr, r) > 0) ret |= 2;
+	return ret;
 }
 
 mm_reg1_t *mm_align_skeleton(void *km, const mm_mapopt_t *opt, const mm_idx_t *mi, int qlen, const char *qstr, int *n_regs_, mm_reg1_t *regs, mm128_t *a)

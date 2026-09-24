@@ -401,8 +401,9 @@ int main(int argc, char *argv[])
 		fprintf(fp_help, "    --lift-map FILE    TSV of <contig name>\\t<|ALT|-|REF|> for --lift\n");
 		fprintf(fp_help, "    --lift-noshift     (rollback only) no indel left-shift / NM refresh after --lift\n");
 		fprintf(fp_help, "    --no-mapq-rule     (control only) no candidate-collapsing rule at all, as in the production image\n");
-		fprintf(fp_help, "    --lift-realign     after --lift, re-derive each lifted read's CIGAR by DP of the whole read against\n");
-		fprintf(fp_help, "                       the base window (projection only anchors it); kept only if not worse by score\n");
+		fprintf(fp_help, "    --lift-realign     after --lift, re-derive each lifted read's CIGAR against the base as mm_align1 does:\n");
+		fprintf(fp_help, "                       exact anchor from the projection + extension DP to both read ends (fitting where\n");
+		fprintf(fp_help, "                       the projection reached the end); replaces the projection iff not worse by score\n");
 		fprintf(fp_help, "    --mate-resolve     an end whose mate has mapq>=--mate-mapq keeps only candidates\n");
 		fprintf(fp_help, "                       compatible with that mate, nearest first, BEFORE mapq; no 0.2/0.8 blend\n");
 		fprintf(fp_help, "    --mate-mapq INT    standalone mapq that makes a mate unambiguous [%d]\n", opt.mate_mapq);
