@@ -55,6 +55,7 @@
 #define MM_F_LIFT_NOSHIFT  (0x200000000000LL) // (rollback only) skip indel left-shift and NM refresh after projection
 #define MM_F_NO_MAPQ_RULE  (0x400000000000LL) // (control only) skip the fork's candidate-collapsing rule entirely, as in the production image
 #define MM_F_LIFT_REALIGN  (0x800000000000LL) // --lift-realign: re-derive a lifted read's CIGAR from the read itself by DP against the base window
+#define MM_F_LIFT_TIE_BASE (0x1000000000000LL) // --lift-tie-base: a contig is used only where it is strictly better than any other place; on a tie with another locus the read is placed as on the plain reference
 
 #define MM_I_HPC          0x1
 #define MM_I_NO_SEQ       0x2
@@ -129,7 +130,7 @@ typedef struct {
 	int32_t mlen, blen;     // seeded exact match length; seeded alignment block length
 	int32_t n_sub;          // number of suboptimal mappings
 	int32_t score0;         // initial chaining score (before chain merging/spliting)
-	uint32_t mapq:8, split:2, rev:1, inv:1, sam_pri:1, proper_frag:1, pe_thru:1, seg_split:1, seg_id:8, split_inv:1, is_alt:1, strand_retained:1, is_spliced:1, lifted:1, pe_ambig:1, on_ctg:1, dummy:1;
+	uint32_t mapq:8, split:2, rev:1, inv:1, sam_pri:1, proper_frag:1, pe_thru:1, seg_split:1, seg_id:8, split_inv:1, is_alt:1, strand_retained:1, is_spliced:1, lifted:1, pe_ambig:1, on_ctg:1, tie_base:1;   // tie_base: --lift-tie-base fired on this read (its contig candidates were dropped)
 	int32_t lift_rid, lift_rs;  // where the alignment sat before projection (contig rid and 0-based contig start); -1 if not lifted
 	int32_t mate_ncand;         // --mate-resolve: how many mate-compatible candidates the read was torn between (>1 = chosen as nearest; review these)
 	uint32_t hash;
@@ -170,6 +171,7 @@ typedef struct {
 
 	float alt_drop;
 	int mate_mapq;   // --mate-mapq: a mate with standalone mapq >= this is "unambiguous" for MM_F_MATE_RESOLVE
+	int lift_tie;    // --lift-tie: score window that counts as a tie for MM_F_LIFT_TIE_BASE; <0 = a*2+b (one substitution)
 
 	int a, b, q, e, q2, e2; // matching score, mismatch, gap-open and gap-ext penalties
 	int transition; // transition mismatch score (A:G, C:T)

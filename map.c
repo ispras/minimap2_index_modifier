@@ -535,6 +535,63 @@ mm_reg1_t* remove_second_suboptimal_alignment(mm_reg1_t *regs, int *num_regs, in
 	return regs;
 }
 
+
+/* --lift-tie-base: the "two good candidates" case, extended.  If within one
+ * substitution (opt->lift_tie, default a*2+b) of the best DP score there are
+ * candidates at two DIFFERENT loci and at least one of them is lifted (came
+ * from a contig), the contig is not strictly better than another place in the
+ * genome: the read cannot tell the panel allele at this locus from that other
+ * place (a paralog whose sequence equals the ALT, or the next unit of a
+ * tandem).  Under the flag every lifted candidate of the read is dropped and
+ * the read is placed as on the plain reference -- same candidates, same mapq
+ * -- so a contig only ever helps where it is strictly better.  chrs_to_drop
+ * is the collapse marking of collect_seed_chromosome_names(): the base copy of
+ * the contig's own locus was marked as the same locus as the lifted best; it
+ * is un-marked here, because on the plain reference it IS a candidate.  Runs
+ * BEFORE the collapsed candidates are removed; regs[0] must be the best
+ * candidate (the parent swap has been done).  Returns 1 when the rule fired. */
+static int mmq_tie_to_base(const mm_idx_t *mi, const mm_mapopt_t *opt, int n_regs, mm_reg1_t *regs, char **chrs_to_drop)
+{
+	int i, j, best = 0, thr, n_lift = 0, fired = 0, k = -1;
+	if (n_regs < 2 || mi->lift == NULL) return 0;
+	thr = opt->lift_tie >= 0 ? opt->lift_tie : opt->a * 2 + opt->b;
+	for (i = 0; i < n_regs; ++i) {
+		if (regs[i].p == NULL) return 0;
+		if (regs[i].p->dp_score > best) best = regs[i].p->dp_score;
+		if (regs[i].lifted) ++n_lift;
+	}
+	if (n_lift == 0) return 0;
+	if (mm_dbg_flag & MM_DBG_PRINT_QNAME) {
+		for (i = 0; i < n_regs; ++i)
+			fprintf(stderr, "TB\tcand %d\trid %d\trs %d\tre %d\trev %d\tlifted %d\tdp %d\tsame_as_0 %d\tmark %s\n", i, regs[i].rid, regs[i].rs, regs[i].re, regs[i].rev, regs[i].lifted, regs[i].p->dp_score, i == 0 ? 1 : mm_lift_same_locus(&regs[0], &regs[i]), chrs_to_drop[i] ? chrs_to_drop[i] : "-");
+	}
+	for (i = 0; i < n_regs && !fired; ++i) {
+		if (!regs[i].lifted || regs[i].p->dp_score < best - thr) continue;
+		for (j = 0; j < n_regs; ++j) {
+			if (j == i || regs[j].p->dp_score < best - thr) continue;
+			if (!mm_lift_same_locus(&regs[i], &regs[j])) { fired = 1; break; }
+		}
+	}
+	if (!fired) return 0;
+	for (i = 0; i < n_regs; ++i)
+		if (!regs[i].lifted && (k < 0 || regs[i].p->dp_score > regs[k].p->dp_score)) k = i;
+	if (k < 0) return 0;   /* nothing but contig candidates: there is no plain placement to fall back to */
+	for (i = 0; i < n_regs; ++i) {   /* drop every lifted candidate, keep (un-collapse) every base candidate */
+		if (chrs_to_drop[i]) { free(chrs_to_drop[i]); chrs_to_drop[i] = NULL; }
+		if (regs[i].lifted) chrs_to_drop[i] = strdup("delete");
+		else regs[i].tie_base = 1;
+	}
+	if (k != 0) {   /* the best base candidate becomes regs[0]; the marks travel with the records */
+		mm_reg1_t tmp = regs[0]; char *tn = chrs_to_drop[0]; int32_t id0 = regs[0].id;
+		regs[0] = regs[k]; regs[k] = tmp;
+		chrs_to_drop[0] = chrs_to_drop[k]; chrs_to_drop[k] = tn;
+		regs[k].id = regs[0].id; regs[0].id = id0;
+		regs[0].parent = regs[k].parent = 0;
+	}
+	regs[0].sam_pri = 1;   /* the survivor is the primary record; the dropped contig hit carried that bit before */
+	return 1;
+}
+
 /* The fork's per-segment sequence: locus rule -> drop collapsed candidates ->
  * refresh dp_max2/subsc (and n_sub when asked) -> mapq.  Factored out so the
  * mate step can re-run it on a pruned candidate set. */
@@ -546,6 +603,7 @@ static mm_reg1_t *mmq_rule_and_mapq(const mm_idx_t *mi, const mm_mapopt_t *opt, 
 	const char *delete_name = "delete";
 	if (apply_rule) {
 		chrs_to_drop = collect_seed_chromosome_names(mi, n_regs, regs, opt->flag);
+		if (opt->flag & MM_F_LIFT_TIE_BASE) mmq_tie_to_base(mi, opt, n_regs, regs, chrs_to_drop);
 		for (z = n_regs - 1; z > 0; z--)
 			if (chrs_to_drop[z] != NULL && strcmp(chrs_to_drop[z], delete_name) == 0)
 				regs = remove_second_suboptimal_alignment(regs, &n_regs, z, opt->a * 2 + opt->b);

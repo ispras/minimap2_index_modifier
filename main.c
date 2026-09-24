@@ -100,6 +100,8 @@ static ko_longopt_t long_options[] = {
 	{ "lift-noshift",   ko_no_argument,       717 },
 	{ "no-mapq-rule",   ko_no_argument,       718 },
 	{ "lift-realign",   ko_no_argument,       719 },
+	{ "lift-tie-base",  ko_no_argument,       720 },
+	{ "lift-tie",       ko_required_argument, 721 },
     { "parse-haplotype",ko_no_argument,       701 },
 	{ "help",           ko_no_argument,       'h' },
 	{ "max-intron-len", ko_required_argument, 'G' },
@@ -291,6 +293,8 @@ int main(int argc, char *argv[])
 		else if (c == 717) opt.flag |= MM_F_LIFT_NOSHIFT; // --lift-noshift
 		else if (c == 718) opt.flag |= MM_F_NO_MAPQ_RULE; // --no-mapq-rule
 		else if (c == 719) opt.flag |= MM_F_LIFT_REALIGN; // --lift-realign
+		else if (c == 720) opt.flag |= MM_F_LIFT_TIE_BASE; // --lift-tie-base
+		else if (c == 721) opt.lift_tie = atoi(o.arg); // --lift-tie
         else if (c == 701) ipt.flag |= MM_PARSE_HT;  // --parse-haplotype
 		else if (c == 330) {
 			fprintf(stderr, "[WARNING] \033[1;31m --lj-min-ratio has been deprecated.\033[0m\n");
@@ -405,6 +409,10 @@ int main(int argc, char *argv[])
 		fprintf(fp_help, "    --lift-realign     after --lift, re-derive each lifted read's CIGAR against the base as mm_align1 does:\n");
 		fprintf(fp_help, "                       exact anchor from the projection + extension DP to both read ends (fitting where\n");
 		fprintf(fp_help, "                       the projection reached the end); replaces the projection iff not worse by score\n");
+		fprintf(fp_help, "    --lift-tie-base    use a contig only where it is strictly better: if within --lift-tie of the best\n");
+		fprintf(fp_help, "                       score there are two loci and one is a contig, drop the contig candidates and\n");
+		fprintf(fp_help, "                       place the read as on the plain reference (tag tb:i:1)\n");
+		fprintf(fp_help, "    --lift-tie INT     score window that counts as a tie for --lift-tie-base [a*2+b]\n");
 		fprintf(fp_help, "    --mate-resolve     an end whose mate has mapq>=--mate-mapq keeps only candidates\n");
 		fprintf(fp_help, "                       compatible with that mate, nearest first, BEFORE mapq; no 0.2/0.8 blend\n");
 		fprintf(fp_help, "    --mate-mapq INT    standalone mapq that makes a mate unambiguous [%d]\n", opt.mate_mapq);

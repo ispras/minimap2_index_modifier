@@ -44,6 +44,7 @@ void mm_mapopt_init(mm_mapopt_t *opt)
 
 	opt->alt_drop = 0.15f;
 	opt->mate_mapq = 30;
+	opt->lift_tie = -1;
 
 	opt->a = 2, opt->b = 4, opt->q = 4, opt->e = 2, opt->q2 = 24, opt->e2 = 1;
 	opt->transition = 0;
