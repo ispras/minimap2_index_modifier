@@ -1,4 +1,5 @@
 #include "mmpriv.h"
+#include "mm_lift.h"
 #include "kalloc.h"
 #include "ksort.h"
 
@@ -109,6 +110,26 @@ mm_seed_t *mm_collect_matches(void *km, int *_n_m, int qlen, int max_occ, int ma
 		for (i = 0; i < n_m0; ++i)
 			if (m[i].n > max_occ)
 				m[i].flt = 1;
+	}
+	if (mi->lift) {
+		/* --lift: the occurrence gate must not count augmentation contigs.  A
+		 * k-mer of a satellite/STR flank sits in every contig cut from that
+		 * repeat (hundreds of them), so its total count crosses max_occ while
+		 * its count on the base sequences does not; the seed was then dropped
+		 * for EVERY read carrying it, the primary chain lost seeds, and mapq
+		 * fell (chr21 slice: cm 15 -> 11, mapq 60 -> 48).  Re-count on base
+		 * sequences only, for seeds not hopelessly frequent (<= 8x max_occ). */
+		const mm_lift_t *lt = (const mm_lift_t*)mi->lift;
+		for (i = 0; i < n_m0; ++i) {
+			mm_seed_t *q = &m[i];
+			uint32_t k, nb = 0;
+			if (!q->flt || q->n > (uint32_t)max_occ * 8) continue;
+			for (k = 0; k < q->n; ++k) {
+				int rid = (int)(q->cr[k] >> 32);
+				if (rid < 0 || rid >= lt->n || lt->a[rid].base_rid < 0) ++nb;
+			}
+			if (nb <= (uint32_t)max_occ) q->flt = 0;
+		}
 	}
 	for (i = 0, n_m = 0, *rep_len = 0, *n_a = 0; i < n_m0; ++i) {
 		mm_seed_t *q = &m[i];
