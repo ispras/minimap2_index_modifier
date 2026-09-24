@@ -229,24 +229,35 @@ int mm_lift_cigar(const mm_lift_rec_t *rec, int32_t ctg_len,
 
 typedef struct { int32_t qs, qe; int64_t diag; } diag_seg_t;
 
-/* Enumerate the diagonals of an alignment as (query interval, ref - query).
- * Returns the number written; cap bounds the output. */
+/* Enumerate the diagonals of an alignment as (forward-read interval, diagonal).
+ * The CIGAR is walked in reference order.  qs/qe are FORWARD-read coordinates
+ * (minimap2 convention), so on the forward strand the read position at the
+ * reference-left end is qs and grows with t (diagonal t - q); on the reverse
+ * strand it is qe and shrinks with t (anti-diagonal t + q).  Using qs for both
+ * strands (the earlier version) was right only when the two clips were equal:
+ * a reverse alignment clipped at one end got a diagonal off by the clip length,
+ * so a clipped base representation and the contig's projection of the same
+ * read at the same place looked like two loci -- two thirds of the mr:i marks
+ * on L1aug were such duplicates.  Returns the number written; cap bounds it. */
 static int32_t diag_segs(const mm_reg1_t *r, diag_seg_t *out, int32_t cap)
 {
 	int32_t n = 0;
 	if (r->p == NULL || r->p->n_cigar == 0) {
-		if (cap > 0) { out[0].qs = r->qs; out[0].qe = r->qe; out[0].diag = (int64_t)r->rs - r->qs; n = 1; }
+		if (cap > 0) { out[0].qs = r->qs; out[0].qe = r->qe; out[0].diag = r->rev? (int64_t)r->rs + r->qe : (int64_t)r->rs - r->qs; n = 1; }
 		return n;
 	} else {
-		int64_t t = r->rs; int32_t q = r->qs; uint32_t k;
+		int64_t t = r->rs; int32_t q = r->rev? r->qe : r->qs; uint32_t k;
 		for (k = 0; k < r->p->n_cigar; ++k) {
 			int op = CIG_OP(r->p->cigar[k]);
 			int32_t l = CIG_LEN(r->p->cigar[k]);
 			if (op == OP_M || op == OP_EQ || op == OP_X) {
-				if (n < cap) { out[n].qs = q; out[n].qe = q + l; out[n].diag = t - q; }
-				++n; t += l; q += l;
+				if (n < cap) {
+					if (r->rev) { out[n].qs = q - l; out[n].qe = q; out[n].diag = t + q; }
+					else        { out[n].qs = q; out[n].qe = q + l; out[n].diag = t - q; }
+				}
+				++n; t += l; q += r->rev? -l : l;
 			} else if (op == OP_I || op == OP_S) {
-				q += l;
+				q += r->rev? -l : l;
 			} else if (op == OP_D || op == OP_N) {
 				t += l;
 			}

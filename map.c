@@ -664,7 +664,7 @@ static int mm_mate_compat(const mm_mapopt_t *opt, int s, const mm_reg1_t *c, con
  * set.  If both ends are ambiguous nothing is touched and the pair is marked
  * (pa:i:1) so those cases can be pulled out and looked at.  Returns 1 when
  * both ends were ambiguous. */
-static int mm_mate_resolve(const mm_idx_t *mi, const mm_mapopt_t *opt, void *km, int *n_regs, mm_reg1_t **regs,
+static int mm_mate_resolve(const mm_idx_t *mi, const mm_mapopt_t *opt, void *km, const int *qlens, int *n_regs, mm_reg1_t **regs,
                            int rep_len, int is_sr, int is_sr_rna, int is_splice)
 {
 	int s, t, i, best = -1, best_span = INT32_MAX, n_compat = 0, unamb[2], maxdp = 0;
@@ -695,26 +695,82 @@ static int mm_mate_resolve(const mm_idx_t *mi, const mm_mapopt_t *opt, void *km,
 	for (i = 0; i < n_regs[s]; ++i)
 		if (regs[s][i].p && regs[s][i].p->dp_max > maxdp) maxdp = regs[s][i].p->dp_max;
 	if (mm_dbg_flag & MM_DBG_PRINT_QNAME) fprintf(stderr, "MR\tseg=%d n=%d mapq=%d anchor=%d:%d-%d rev=%d\n", s, n_regs[s], regs[s][0].mapq, anchor->rid, anchor->rs, anchor->re, anchor->rev);
-	for (i = 0; i < n_regs[s]; ++i) {
-		int span;
-		if (regs[s][i].p == NULL || regs[s][i].p->dp_max < maxdp - (opt->a * 2 + opt->b)) continue;
-		span = mm_mate_compat(opt, s, &regs[s][i], anchor);
-		if (mm_dbg_flag & MM_DBG_PRINT_QNAME) fprintf(stderr, "MR\t  cand %d: %d:%d-%d q%d-%d rev=%d dp_max=%d dp_score=%d span=%d\n", i, regs[s][i].rid, regs[s][i].rs, regs[s][i].re, regs[s][i].qs, regs[s][i].qe, regs[s][i].rev, regs[s][i].p->dp_max, regs[s][i].p->dp_score, span);
-		if (span < 0) continue;
-		++n_compat;
-		if (span < best_span) best_span = span, best = i;   /* ties: lower index = better score */
+	{
+		/* Selection among the candidates in the DP window that are compatible with the mate.
+		 *   1. loci: candidates that are the SAME locus (mm_lift_same_locus: shared diagonal on a
+		 *      common read interval -- the base copy and the contig's projection, a clipped and an
+		 *      unclipped representation) form one locus; its representative is the best DP score
+		 *      (a representation is chosen by score, never by a few bases of span).
+		 *   2. between loci: with --mate-frag the locus whose fragment is nearest to the library's
+		 *      typical length; without it the shortest fragment (the earlier rule).  The fragment is
+		 *      measured on the read, not on the reference: clipped bases at the outer ends and
+		 *      insertions/deletions are added back, so a contig with a long insertion or an alignment
+		 *      clipped by a contig edge is not "nearer" just because its reference span is shorter.
+		 *   3. mapq: if another locus ties with the chosen one by DP score (within one substitution),
+		 *      its representative is kept, so the mapq recomputed below reflects the tie instead of
+		 *      reporting 60 for a choice the data cannot make.  mr:i = number of loci. */
+		int sub = opt->a * 2 + opt->b, m = 0, n_loci = 0, ci, cj, chosen = -1;
+		int *cand = (int*)kmalloc(km, n_regs[s] * sizeof(int) * 3), *loc = cand + n_regs[s], *spanv = loc + n_regs[s];
+		for (i = 0; i < n_regs[s]; ++i) {
+			int span, sp;
+			if (regs[s][i].p == NULL || regs[s][i].p->dp_max < maxdp - sub) continue;
+			span = mm_mate_compat(opt, s, &regs[s][i], anchor);
+			if (mm_dbg_flag & MM_DBG_PRINT_QNAME) fprintf(stderr, "MR\t  cand %d: %d:%d-%d q%d-%d rev=%d dp_max=%d dp_score=%d span=%d\n", i, regs[s][i].rid, regs[s][i].rs, regs[s][i].re, regs[s][i].qs, regs[s][i].qe, regs[s][i].rev, regs[s][i].p->dp_max, regs[s][i].p->dp_score, span);
+			if (span < 0) continue;
+			/* fragment on the read: reference span + outer clips + (insertions - deletions) of both ends */
+			sp = span;
+			{
+				const mm_reg1_t *c = &regs[s][i], *left = c->rs <= anchor->rs ? c : anchor, *right = c->rs <= anchor->rs ? anchor : c;
+				int ql_left = s == 0 ? (left == c ? qlens[0] : qlens[1]) : (left == c ? qlens[1] : qlens[0]);
+				int ql_right = s == 0 ? (right == c ? qlens[0] : qlens[1]) : (right == c ? qlens[1] : qlens[0]);
+				sp += left->rev ? ql_left - left->qe : left->qs;            /* clip at the reference-left end */
+				sp += right->rev ? right->qs : ql_right - right->qe;        /* clip at the reference-right end */
+				if (c->p) { uint32_t k; for (k = 0; k < c->p->n_cigar; ++k) { int op = c->p->cigar[k]&0xf, l = c->p->cigar[k]>>4; if (op == MM_CIGAR_INS) sp += l; else if (op == MM_CIGAR_DEL) sp -= l; } }
+				if (anchor->p) { uint32_t k; for (k = 0; k < anchor->p->n_cigar; ++k) { int op = anchor->p->cigar[k]&0xf, l = anchor->p->cigar[k]>>4; if (op == MM_CIGAR_INS) sp += l; else if (op == MM_CIGAR_DEL) sp -= l; } }
+			}
+			cand[m] = i; spanv[m] = sp; loc[m] = m;
+			for (cj = 0; cj < m; ++cj)   /* same locus as an earlier candidate -> same locus id (representative = best DP = lowest index, regs are score-sorted) */
+				if (mm_lift_same_locus(&regs[s][cand[cj]], &regs[s][i])) { loc[m] = loc[cj]; break; }
+			++m;
+		}
+		if (m == 0) { kfree(km, cand); return 0; }   /* nothing compatible: leave it to mm_pair() as before */
+		for (ci = 0; ci < m; ++ci) if (loc[ci] == ci) ++n_loci;
+		/* choose the locus by its representative's fragment */
+		for (ci = 0; ci < m; ++ci) {
+			int d;
+			if (loc[ci] != ci) continue;   /* representatives only */
+			d = opt->mate_frag > 0 ? (spanv[ci] > opt->mate_frag ? spanv[ci] - opt->mate_frag : opt->mate_frag - spanv[ci]) : spanv[ci];
+			if (chosen < 0 || d < best_span || (d == best_span && regs[s][cand[ci]].p->dp_score > regs[s][cand[chosen]].p->dp_score)) best_span = d, chosen = ci;
+		}
+		best = cand[chosen]; n_compat = n_loci;
+		/* mapq of the choice: computed on the chosen representative plus every other locus whose
+		 * representative ties it by DP score (within one substitution), on a TEMPORARY array -- the
+		 * record set itself is pruned to the chosen one, so that mm_pair() has no second choice to
+		 * re-open (it would pick by its own order, blind to the fragment length). */
+		{
+			int n_tmp = 0, mapq_tie;
+			mm_reg1_t *tmp = (mm_reg1_t*)malloc(m * sizeof(mm_reg1_t));
+			tmp[n_tmp++] = regs[s][best];
+			for (ci = 0; ci < m; ++ci)
+				if (loc[ci] == ci && ci != chosen && regs[s][cand[ci]].p->dp_score >= regs[s][best].p->dp_score - sub) tmp[n_tmp++] = regs[s][cand[ci]];
+			for (i = 0; i < n_tmp; ++i) { tmp[i].id = i; tmp[i].parent = 0; tmp[i].sam_pri = i == 0; }
+			tmp = mmq_rule_and_mapq(mi, opt, km, &n_tmp, tmp, rep_len, is_sr, is_sr_rna, is_splice, 1, 0);
+			mapq_tie = tmp[0].mapq;
+			if (mm_dbg_flag & MM_DBG_PRINT_QNAME) fprintf(stderr, "MR\t  loci=%d chosen=%d (cand %d, frag %d) tied_loci=%d mapq_tie=%d\n", n_loci, chosen, best, spanv[chosen], n_tmp - 1, mapq_tie);
+			free(tmp);
+			/* drop everything but the chosen representative, highest index first */
+			for (i = n_regs[s] - 1; i >= 0 && n_regs[s] > 1; --i) {
+				if (i == best) continue;
+				regs[s] = remove_second_suboptimal_alignment(regs[s], &n_regs[s], i, sub);
+				if (i < best) --best;
+			}
+			regs[s][0].id = 0; regs[s][0].parent = 0; regs[s][0].sam_pri = 1;
+			regs[s][0].mate_ncand = n_compat; /* emitted as mr:i:N when N > 1 -- "one of several loci", to look at by eye */
+			kfree(km, cand);
+			regs[s] = mmq_rule_and_mapq(mi, opt, km, &n_regs[s], regs[s], rep_len, is_sr, is_sr_rna, is_splice, 1, 0);
+			if (n_tmp > 1 && regs[s][0].mapq > mapq_tie) regs[s][0].mapq = mapq_tie;   /* the data could not tell the tied loci apart */
+		}
 	}
-	if (best < 0) return 0;   /* nothing compatible: leave it to mm_pair() as before */
-	/* drop everything but the nearest compatible candidate, highest index first */
-	for (i = n_regs[s] - 1; i >= 0 && n_regs[s] > 1; --i) {
-		if (i == best) continue;
-		regs[s] = remove_second_suboptimal_alignment(regs[s], &n_regs[s], i, opt->a * 2 + opt->b);
-		if (i < best) --best;
-	}
-	/* slot 0 is the primary; the survivor is there now (best == 0) */
-	regs[s][0].id = 0; regs[s][0].parent = 0; regs[s][0].sam_pri = 1;
-	regs[s][0].mate_ncand = n_compat; /* emitted as mr:i:N when N > 1 -- the "nearest of several" cases to look at by eye */
-	regs[s] = mmq_rule_and_mapq(mi, opt, km, &n_regs[s], regs[s], rep_len, is_sr, is_sr_rna, is_splice, 1, 0);
 	return 0;
 }
 
@@ -875,7 +931,7 @@ void mm_map_frag_core(const mm_idx_t *mi, int n_segs, const int *qlens, const ch
 		mm_seg_free(b->km, n_segs, seg);
 		if (n_segs == 2 && opt->pe_ori >= 0 && (opt->flag&MM_F_CIGAR)) {
 			if (opt->flag & MM_F_MATE_RESOLVE)
-				both_ambig = mm_mate_resolve(mi, opt, b->km, n_regs, regs, rep_len, is_sr, is_sr_rna, is_splice);
+				both_ambig = mm_mate_resolve(mi, opt, b->km, qlens, n_regs, regs, rep_len, is_sr, is_sr_rna, is_splice);
 			if (do_shift) /* NM against the base, after every mapq computation (they used the contig identity) */
 				for (i = 0; i < n_segs; ++i) { int z; for (z = 0; z < n_regs[i]; ++z) if (regs[i][z].lifted) mm_lift_refresh(mi, qlens[i], seqs[i], &regs[i][z], 2); }
 			mm_pair(b->km, max_chain_gap_ref, opt->pe_bonus, opt->a * 2 + opt->b, opt->a, qlens, n_regs, regs, !!(opt->flag & MM_F_MATE_RESOLVE)); // pairing

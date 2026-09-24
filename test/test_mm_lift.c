@@ -469,6 +469,22 @@ static void t8_same_locus(void)
 	/* same coordinates, other strand */
 	e = mk_reg(0, 1, 1000, 0, 150, cins, 3, &pe);
 	expect_int("other strand is NOT the same locus", mm_lift_same_locus(&a, &e), 0);
+	{	/* REVERSE strand, asymmetric clip: the projected read (qs 0, qe 151, 5D inside) and the base
+		 * placement clipped by 4 at the read's end (qs 0, qe 147, starts 9 bp to the right).  In
+		 * reference order the read runs backwards, so the base placement's read offset at its
+		 * reference-left end is qlen - qe = 4, not qs = 0: the two share the block-B anti-diagonal.
+		 * (The earlier diag_segs used qs for both strands and called these two different loci --
+		 * two thirds of the mr:i marks on L1aug.) */
+		uint32_t crd[] = { CIG_MK(50, OP_M), CIG_MK(5, OP_D), CIG_MK(101, OP_M) };
+		uint32_t crc[] = { CIG_MK(147, OP_M) };
+		mm_extra_t *p1, *p2, *p3;
+		mm_reg1_t g1 = mk_reg(0, 1, 13547254, 0, 151, crd, 3, &p1);   /* rev, 5D at read pos 101 (in ref order after 50M) */
+		mm_reg1_t g2 = mk_reg(0, 1, 13547263, 0, 147, crc, 1, &p2);   /* rev, clipped 4 at qe, same place, no indel */
+		mm_reg1_t g3 = mk_reg(0, 1, 13547263, 4, 151, crc, 1, &p3);   /* rev, clipped 4 at qs instead: offset differs -> other diagonal */
+		expect_int("reverse strand, clip at the read end: same locus", mm_lift_same_locus(&g1, &g2), 1);
+		expect_int("reverse strand, clip at the read start: NOT the same locus", mm_lift_same_locus(&g1, &g3), 0);
+		free(p1); free(p2); free(p3);
+	}
 	/* other sequence */
 	f = mk_reg(1, 0, 1000, 0, 150, cins, 3, &pf);
 	expect_int("other rid is NOT the same locus", mm_lift_same_locus(&a, &f), 0);

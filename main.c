@@ -102,6 +102,7 @@ static ko_longopt_t long_options[] = {
 	{ "lift-realign",   ko_no_argument,       719 },
 	{ "lift-tie-base",  ko_no_argument,       720 },
 	{ "lift-tie",       ko_required_argument, 721 },
+	{ "mate-frag",      ko_required_argument, 722 },
     { "parse-haplotype",ko_no_argument,       701 },
 	{ "help",           ko_no_argument,       'h' },
 	{ "max-intron-len", ko_required_argument, 'G' },
@@ -295,6 +296,7 @@ int main(int argc, char *argv[])
 		else if (c == 719) opt.flag |= MM_F_LIFT_REALIGN; // --lift-realign
 		else if (c == 720) opt.flag |= MM_F_LIFT_TIE_BASE; // --lift-tie-base
 		else if (c == 721) opt.lift_tie = atoi(o.arg); // --lift-tie
+		else if (c == 722) opt.mate_frag = atoi(o.arg); // --mate-frag
         else if (c == 701) ipt.flag |= MM_PARSE_HT;  // --parse-haplotype
 		else if (c == 330) {
 			fprintf(stderr, "[WARNING] \033[1;31m --lj-min-ratio has been deprecated.\033[0m\n");
@@ -416,6 +418,8 @@ int main(int argc, char *argv[])
 		fprintf(fp_help, "    --mate-resolve     an end whose mate has mapq>=--mate-mapq keeps only candidates\n");
 		fprintf(fp_help, "                       compatible with that mate, nearest first, BEFORE mapq; no 0.2/0.8 blend\n");
 		fprintf(fp_help, "    --mate-mapq INT    standalone mapq that makes a mate unambiguous [%d]\n", opt.mate_mapq);
+		fprintf(fp_help, "    --mate-frag INT    typical fragment length: among mate-compatible loci take the one nearest to it,\n");
+		fprintf(fp_help, "                       fragment measured with clips and indels; 0 = the shortest span [%d]\n", opt.mate_frag);
 		fprintf(fp_help, "    --mapq-quotient    collapse candidate alignments by projection onto the\n");
 		fprintf(fp_help, "                       base reference instead of by sequence name\n");
 		fprintf(fp_help, "    --mapq-prefer-primary  on score ties keep the representative on the base\n");

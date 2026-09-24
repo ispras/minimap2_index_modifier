@@ -172,6 +172,7 @@ typedef struct {
 	float alt_drop;
 	int mate_mapq;   // --mate-mapq: a mate with standalone mapq >= this is "unambiguous" for MM_F_MATE_RESOLVE
 	int lift_tie;    // --lift-tie: score window that counts as a tie for MM_F_LIFT_TIE_BASE; <0 = a*2+b (one substitution)
+	int mate_frag;   // --mate-frag: typical fragment length of the library; >0 = among mate-compatible loci pick the one nearest to it, 0 = the shortest span
 
 	int a, b, q, e, q2, e2; // matching score, mismatch, gap-open and gap-ext penalties
 	int transition; // transition mismatch score (A:G, C:T)
