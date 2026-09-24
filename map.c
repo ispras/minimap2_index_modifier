@@ -651,6 +651,7 @@ static int mm_mate_resolve(const mm_idx_t *mi, const mm_mapopt_t *opt, void *km,
 	}
 	/* slot 0 is the primary; the survivor is there now (best == 0) */
 	regs[s][0].id = 0; regs[s][0].parent = 0; regs[s][0].sam_pri = 1;
+	regs[s][0].mate_ncand = n_compat; /* emitted as mr:i:N when N > 1 -- the "nearest of several" cases to look at by eye */
 	regs[s] = mmq_rule_and_mapq(mi, opt, km, &n_regs[s], regs[s], rep_len, is_sr, is_sr_rna, is_splice, 1, 0);
 	return 0;
 }
