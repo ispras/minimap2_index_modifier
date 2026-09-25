@@ -368,8 +368,18 @@ char **collect_seed_chromosome_names(const mm_idx_t *mi, int n_a, mm_reg1_t *reg
 		chromosome_names[i] = NULL;
 	}
 	if (regs != NULL) {
-		if (regs[0].parent != 0) {
-			int parent_id = regs[0].parent;
+		/* regs[0].parent is an ID assigned by mm_set_parent(), not an array index: after
+		 * mm_select_sub() compacted the array (single-end path: align_regs() runs
+		 * set_parent + select_sub, and nothing re-indexes before this rule) the id can
+		 * exceed n_a.  The former code indexed regs[parent] directly and wrote out of
+		 * bounds -- heap corruption / SIGSEGV on single-end sr input with many
+		 * candidates (loci.fq, 25.09; present in every fork binary since `new`).  The
+		 * paired path re-runs mm_set_parent() first, so it never hit this.  Look the
+		 * parent up by id; if it is gone, there is nothing to swap. */
+		int parent_id = -1;
+		if (regs[0].parent != regs[0].id)
+			for (i = 0; i < n_a; ++i) if (regs[i].id == regs[0].parent) { parent_id = i; break; }
+		if (parent_id > 0) {
 			mm_reg1_t tmp = regs[0];
 			regs[0] = regs[parent_id];
 			regs[parent_id] = tmp;
