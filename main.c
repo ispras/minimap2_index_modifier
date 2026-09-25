@@ -103,6 +103,7 @@ static ko_longopt_t long_options[] = {
 	{ "lift-tie-base",  ko_no_argument,       720 },
 	{ "lift-tie",       ko_required_argument, 721 },
 	{ "mate-frag",      ko_required_argument, 722 },
+	{ "lift-realign-margin", ko_required_argument, 723 },
     { "parse-haplotype",ko_no_argument,       701 },
 	{ "help",           ko_no_argument,       'h' },
 	{ "max-intron-len", ko_required_argument, 'G' },
@@ -297,6 +298,7 @@ int main(int argc, char *argv[])
 		else if (c == 720) opt.flag |= MM_F_LIFT_TIE_BASE; // --lift-tie-base
 		else if (c == 721) opt.lift_tie = atoi(o.arg); // --lift-tie
 		else if (c == 722) opt.mate_frag = atoi(o.arg); // --mate-frag
+		else if (c == 723) opt.lift_realign_margin = atoi(o.arg); // --lift-realign-margin
         else if (c == 701) ipt.flag |= MM_PARSE_HT;  // --parse-haplotype
 		else if (c == 330) {
 			fprintf(stderr, "[WARNING] \033[1;31m --lj-min-ratio has been deprecated.\033[0m\n");
@@ -411,6 +413,8 @@ int main(int argc, char *argv[])
 		fprintf(fp_help, "    --lift-realign     after --lift, re-derive each lifted read's CIGAR against the base as mm_align1 does:\n");
 		fprintf(fp_help, "                       exact anchor from the projection + extension DP to both read ends (fitting where\n");
 		fprintf(fp_help, "                       the projection reached the end); replaces the projection iff not worse by score\n");
+		fprintf(fp_help, "    --lift-realign-margin INT  a re-derived middle replaces the projection only if better by MORE than\n");
+		fprintf(fp_help, "                       this score (keeps one representation per locus) [a*2+b]; 0 = any improvement\n");
 		fprintf(fp_help, "    --lift-tie-base    use a contig only where it is strictly better: if within --lift-tie of the best\n");
 		fprintf(fp_help, "                       score there are two loci and one is a contig, drop the contig candidates and\n");
 		fprintf(fp_help, "                       place the read as on the plain reference (tag tb:i:1)\n");

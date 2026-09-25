@@ -1256,7 +1256,19 @@ static int mm_lift_realign_mid(void *km, const mm_mapopt_t *opt, const mm_idx_t 
 		for (k = 0; k < (uint32_t)ez.n_cigar; ++k) fprintf(stderr, "%d%c", ez.cigar[k]>>4, MM_CIGAR_STR[ez.cigar[k]&0xf]);
 		fprintf(stderr, "\n");
 	}
-	if (sc_new < sc_old) goto done;
+	/* Representation consistency (25.09, L1re2 vs L1re by locus): a re-derived middle that beats
+	 * the projection by less than one substitution is an equally plausible placement of the same
+	 * indel (a tandem where one read's errors favour the next unit).  Taking it splits the reads
+	 * of a locus between two representations and DeepVariant halves the allele fraction (chr1:
+	 * 209624880, I8: 17 reads at the junction -> 13 + 4 shifted by 29 bp, 1/1 -> 0/1).  So the
+	 * projection -- the panel's representation, shared by every lifted read of the locus -- is
+	 * kept unless the read contradicts it by more than opt->lift_realign_margin (default a*2+b,
+	 * one substitution): a foreign allele (I8 vs panel I12: 28 points) or a deletion the read
+	 * does not carry (>= 20 points) still replaces it. */
+	{
+		int32_t margin = opt->lift_realign_margin >= 0 ? opt->lift_realign_margin : opt->a * 2 + opt->b;
+		if (sc_new < sc_old + margin) goto done;
+	}
 	if (ez.n_cigar == n_mid && memcmp(ez.cigar, mid, (size_t)n_mid * 4) == 0) goto done;
 	/* 3. splice head + new mid + tail; the reference span is unchanged by construction */
 	for (k = 0; k < (uint32_t)n_head; ++k) old = ksw_push_cigar(km, &n_old, &m_old, old, head[k]&0xf, head[k]>>4);
