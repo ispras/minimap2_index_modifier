@@ -89,10 +89,10 @@ cdef extern from "minimap.h":
 		void *h
 
 	ctypedef struct mm_idx_reader_t:
-		pass
+		int error
 
 	mm_idx_reader_t *mm_idx_reader_open(const char *fn, const mm_idxopt_t *opt, const char *fn_out)
-	mm_idx_t *mm_idx_reader_read(mm_idx_reader_t *r, int n_threads)
+	mm_idx_t *mm_idx_reader_read(mm_idx_reader_t *r, int n_threads, char *vcf_with_variants)
 	void mm_idx_reader_close(mm_idx_reader_t *r)
 	void mm_idx_destroy(mm_idx_t *mi)
 	void mm_mapopt_update(mm_mapopt_t *opt, const mm_idx_t *mi)

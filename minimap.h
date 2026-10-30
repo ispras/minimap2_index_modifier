@@ -50,12 +50,12 @@
 #define MM_F_OUT_JUNC      (0x10000000000LL)
 #define MM_F_MAPQ_QUOTIENT (0x20000000000LL) // collapse candidates by projection onto the base reference
 #define MM_F_MAPQ_PREFER_T (0x40000000000LL) // on score ties keep the representative that lies on the base reference
-#define MM_F_LIFT          (0x80000000000LL) // project augmentation-contig placements onto the base reference BEFORE the mapq rule
-#define MM_F_MATE_RESOLVE  (0x100000000000LL) // an unambiguous mate prunes the other end's candidates before mapq; no 0.2/0.8 blend in mm_pair()
-#define MM_F_LIFT_NOSHIFT  (0x200000000000LL) // (rollback only) skip indel left-shift and NM refresh after projection
-#define MM_F_NO_MAPQ_RULE  (0x400000000000LL) // (control only) skip the fork's candidate-collapsing rule entirely, as in the production image
-#define MM_F_LIFT_REALIGN  (0x800000000000LL) // --lift-realign: re-derive a lifted read's CIGAR from the read itself by DP against the base window
-#define MM_F_LIFT_TIE_BASE (0x1000000000000LL) // --lift-tie-base: a contig is used only where it is strictly better than any other place; on a tie with another locus the read is placed as on the plain reference
+#define MM_F_LIFT          (0x80000000000LL) // project contig placements onto the base reference before mapq
+#define MM_F_MATE_RESOLVE  (0x100000000000LL) // an unambiguous mate prunes the other end's candidates before mapq
+#define MM_F_LIFT_NOSHIFT  (0x200000000000LL) // skip indel left-shift and NM refresh after projection
+#define MM_F_NO_MAPQ_RULE  (0x400000000000LL) // skip the candidate-collapsing mapq rule
+#define MM_F_LIFT_REALIGN  (0x800000000000LL) // re-align a lifted read against the base window
+#define MM_F_LIFT_TIE_BASE (0x1000000000000LL) // use a contig placement only if strictly better than any other locus
 
 #define MM_I_HPC          0x1
 #define MM_I_NO_SEQ       0x2
@@ -106,6 +106,8 @@ typedef struct {
 	struct mm_idx_spsc_s *spsc;// splice score (hidden)
 	struct mm_idx_jjump_s *J;  // junctions to create jumps (hidden)
 	struct mm_lift_s *lift;    // contig->base-reference projection table; NULL unless --lift
+	struct mm_varalt_s *varalt; // known SNV ALT alleles; NULL unless --var-alt
+	struct mm_hapdp_s *hapdp;   // panel SNVs with carrier haplotypes; NULL unless --hap-dp
 	void *km, *h;
 } mm_idx_t;
 
@@ -130,9 +132,11 @@ typedef struct {
 	int32_t mlen, blen;     // seeded exact match length; seeded alignment block length
 	int32_t n_sub;          // number of suboptimal mappings
 	int32_t score0;         // initial chaining score (before chain merging/spliting)
-	uint32_t mapq:8, split:2, rev:1, inv:1, sam_pri:1, proper_frag:1, pe_thru:1, seg_split:1, seg_id:8, split_inv:1, is_alt:1, strand_retained:1, is_spliced:1, lifted:1, pe_ambig:1, on_ctg:1, tie_base:1;   // tie_base: --lift-tie-base fired on this read (its contig candidates were dropped)
-	int32_t lift_rid, lift_rs;  // where the alignment sat before projection (contig rid and 0-based contig start); -1 if not lifted
-	int32_t mate_ncand;         // --mate-resolve: how many mate-compatible candidates the read was torn between (>1 = chosen as nearest; review these)
+	uint32_t mapq:8, split:2, rev:1, inv:1, sam_pri:1, proper_frag:1, pe_thru:1, seg_split:1, seg_id:8, split_inv:1, is_alt:1, strand_retained:1, is_spliced:1, lifted:1, pe_ambig:1, on_ctg:1, tie_base:1;   // tie_base: contig candidates dropped by MM_F_LIFT_TIE_BASE
+	int32_t lift_rid, lift_rs;  // contig rid and 0-based start before projection; -1 if not lifted
+	int32_t mate_ncand;         // number of mate-compatible candidates under MM_F_MATE_RESOLVE
+	int32_t va;                 // mismatches re-scored as matches by --var-alt (SAM va:i)
+	int32_t hd, hd_dmlen;       // --hap-dp: matched ALTs of the chosen string (SAM hd:i); mlen gain to undo before NM
 	uint32_t hash;
 	float div;
 	mm_extra_t *p;
@@ -170,10 +174,13 @@ typedef struct {
 	int best_n;      // top best_n chains are subjected to DP alignment
 
 	float alt_drop;
-	int mate_mapq;   // --mate-mapq: a mate with standalone mapq >= this is "unambiguous" for MM_F_MATE_RESOLVE
-	int lift_tie;    // --lift-tie: score window that counts as a tie for MM_F_LIFT_TIE_BASE; <0 = a*2+b (one substitution)
-	int lift_realign_margin; // --lift-realign-margin: a re-derived middle must beat the projection by more than this (score); <0 = a*2+b
-	int mate_frag;   // --mate-frag: typical fragment length of the library; >0 = among mate-compatible loci pick the one nearest to it, 0 = the shortest span
+	int mate_mapq;   // a mate with mapq >= this is unambiguous for MM_F_MATE_RESOLVE
+	int lift_tie;    // score difference counted as a tie for MM_F_LIFT_TIE_BASE; <0: a*2+b
+	int lift_realign_margin; // re-alignment must beat the projection by more than this; <0: a*2+b
+	int mate_frag;   // expected fragment length; >0: pick the mate-compatible locus nearest to it, 0: shortest
+	int pair_mapq;   // 0: default; 1: softmax over pairs, shared mapq; 2: as 1 but only raise an end
+	int mate_sd;     // fragment length s.d. for the pair_mapq prior; 0: no prior
+	int mate_gap;    // >0: an end is unambiguous if dp_max - dp_max2 >= this (instead of mate_mapq)
 
 	int a, b, q, e, q2, e2; // matching score, mismatch, gap-open and gap-ext penalties
 	int transition; // transition mismatch score (A:G, C:T)
@@ -217,6 +224,7 @@ typedef struct {
 		struct mm_bseq_file_s *seq;
 		FILE *idx;
 	} fp;
+	int error; /* errno from a failed binary index read; zero at clean EOF */
 } mm_idx_reader_t;
 
 // memory buffer for thread-local storage during mapping
@@ -281,7 +289,8 @@ mm_idx_reader_t *mm_idx_reader_open(const char *fn, const mm_idxopt_t *opt, cons
  * @param r          index reader
  * @param n_threads  number of threads for constructing index
  *
- * @return an index on success; NULL if reaching the end of the input file
+ * @return an index on success; NULL at EOF or a binary-read failure.
+ *         Inspect r->error after NULL: it is zero at EOF and nonzero on failure.
  */
 mm_idx_t *mm_idx_reader_read(mm_idx_reader_t *r, int n_threads, char * vcf_with_variants);
 
@@ -312,7 +321,8 @@ int64_t mm_idx_is_idx(const char *fn);
  *
  * @param fp         pointer to FILE object
  *
- * @return minimap2 index read from fp
+ * @return minimap2 index; NULL with errno=0 at clean EOF, otherwise errno
+ *         describes a detected read, format or allocation failure
  */
 mm_idx_t *mm_idx_load(FILE *fp);
 

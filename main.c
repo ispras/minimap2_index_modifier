@@ -6,6 +6,9 @@
 #include "minimap.h"
 #include "mmpriv.h"
 #include "mm_lift.h"
+#include "mm_varalt.h"
+#include "mm_hapdp.h"
+#include "rmin.h"
 #include "ketopt.h"
 
 #ifdef __linux__
@@ -103,8 +106,25 @@ static ko_longopt_t long_options[] = {
 	{ "lift-tie-base",  ko_no_argument,       720 },
 	{ "lift-tie",       ko_required_argument, 721 },
 	{ "mate-frag",      ko_required_argument, 722 },
+	{ "pair-mapq",      ko_required_argument, 770 },
+	{ "mate-sd",        ko_required_argument, 771 },
+	{ "mate-gap",       ko_required_argument, 772 },
 	{ "lift-realign-margin", ko_required_argument, 723 },
+	{ "var-alt",        ko_required_argument, 724 },
+	{ "hap-dp",         ko_required_argument, 760 },
+	{ "hap-dp-max",     ko_required_argument, 761 },
+	{ "hap-dp-mask",    ko_required_argument, 762 },
     { "parse-haplotype",ko_no_argument,       701 },
+	{ "read-minimizers", ko_required_argument, 730 },
+	{ "read-kmers",      ko_required_argument, 731 },
+	{ "read-min-count",  ko_required_argument, 732 },
+	{ "read-min-mode",   ko_required_argument, 733 },
+	{ "read-min-frac",   ko_required_argument, 734 },
+	{ "read-min-rate",   ko_required_argument, 735 },
+	{ "read-min-seed",   ko_required_argument, 736 },
+	{ "read-min-list",   ko_required_argument, 737 },
+	{ "read-min-dump",   ko_required_argument, 738 },
+	{ "read-min-ref-kmers", ko_required_argument, 739 },
 	{ "help",           ko_no_argument,       'h' },
 	{ "max-intron-len", ko_required_argument, 'G' },
 	{ "version",        ko_no_argument,       'V' },
@@ -155,6 +175,8 @@ int main(int argc, char *argv[])
 	int i, c, n_threads = 3, n_parts, old_best_n = -1;
 	char *vcf_with_variants = 0;
 	char *fn_lift_map = 0;
+	char *fn_var_alt = 0, *fn_hap_dp = 0, *fn_hap_dp_mask = 0;
+	int hap_dp_max = 16;
 	int lift_jct = 101;
 	float spsc_scale = 0.7f;
 	char *fnw = 0, *rg = 0, *fn_bed_junc = 0, *fn_bed_jump = 0, *fn_bed_pass1 = 0, *fn_spsc = 0, *s, *alt_list = 0;
@@ -298,8 +320,32 @@ int main(int argc, char *argv[])
 		else if (c == 720) opt.flag |= MM_F_LIFT_TIE_BASE; // --lift-tie-base
 		else if (c == 721) opt.lift_tie = atoi(o.arg); // --lift-tie
 		else if (c == 722) opt.mate_frag = atoi(o.arg); // --mate-frag
+		else if (c == 770) { // --pair-mapq
+			if (strcmp(o.arg, "off") == 0) opt.pair_mapq = 0;
+			else if (strcmp(o.arg, "vg") == 0) opt.pair_mapq = 1;
+			else if (strcmp(o.arg, "vgup") == 0) opt.pair_mapq = 2;
+			else { fprintf(stderr, "[ERROR] --pair-mapq takes off, vg or vgup\n"); return 1; }
+		}
+		else if (c == 771) opt.mate_sd = atoi(o.arg); // --mate-sd
+		else if (c == 772) opt.mate_gap = atoi(o.arg); // --mate-gap
 		else if (c == 723) opt.lift_realign_margin = atoi(o.arg); // --lift-realign-margin
+		else if (c == 724) fn_var_alt = o.arg; // --var-alt
+		else if (c == 760) fn_hap_dp = o.arg; // --hap-dp
+		else if (c == 761) hap_dp_max = atoi(o.arg); // --hap-dp-max
+		else if (c == 762) fn_hap_dp_mask = o.arg; // --hap-dp-mask
         else if (c == 701) ipt.flag |= MM_PARSE_HT;  // --parse-haplotype
+		else if (c == 730) rmin_opt.fn_mm = o.arg; // --read-minimizers (rmin)
+		else if (c == 731) rmin_opt.fn_km = o.arg; // --read-kmers
+		else if (c == 732) rmin_opt.min_cnt = atoi(o.arg); // --read-min-count
+		else if (c == 733) { // --read-min-mode
+			if ((rmin_opt.mode = rmin_parse_mode(o.arg)) < 0) { fprintf(stderr, "[ERROR] unknown --read-min-mode '%s'\n", o.arg); return 1; }
+		}
+		else if (c == 734) rmin_opt.frac = atof(o.arg); // --read-min-frac
+		else if (c == 735) rmin_opt.rate = atof(o.arg); // --read-min-rate
+		else if (c == 736) rmin_opt.seed = strtoull(o.arg, 0, 10); // --read-min-seed
+		else if (c == 737) rmin_opt.fn_list = o.arg; // --read-min-list
+		else if (c == 738) rmin_opt.fn_dump = o.arg; // --read-min-dump
+		else if (c == 739) rmin_opt.fn_ref = o.arg; // --read-min-ref-kmers
 		else if (c == 330) {
 			fprintf(stderr, "[WARNING] \033[1;31m --lj-min-ratio has been deprecated.\033[0m\n");
 		} else if (c == 313) { // --sr
@@ -419,11 +465,25 @@ int main(int argc, char *argv[])
 		fprintf(fp_help, "                       score there are two loci and one is a contig, drop the contig candidates and\n");
 		fprintf(fp_help, "                       place the read as on the plain reference (tag tb:i:1)\n");
 		fprintf(fp_help, "    --lift-tie INT     score window that counts as a tie for --lift-tie-base [a*2+b]\n");
+		fprintf(fp_help, "    --var-alt FILE     known SNV alleles <seq>\\t<1-based pos>\\t<ALTs> (text or gzip): a mismatch whose read\n");
+		fprintf(fp_help, "                       base is a known ALT at that base position is scored as a match (dp, identity for\n");
+		fprintf(fp_help, "                       mapq; CIGAR and NM unchanged; tag va:i); candidates re-ranked before mapq\n");
+		fprintf(fp_help, "    --hap-dp FILE      haplotype-consistent DP: <seq>\\t<1-based pos>\\t<ALT>\\t<mask_hi>\\t<mask_lo> (hex carrier\n");
+		fprintf(fp_help, "                       haplotypes); each candidate is scored on the best panel haplotype string over\n");
+		fprintf(fp_help, "                       the SNVs of its window, the base string included (dp, identity for mapq;\n");
+		fprintf(fp_help, "                       CIGAR and NM against the base; tag hd:i); not with --var-alt\n");
+		fprintf(fp_help, "    --hap-dp-max INT   haplotype strings per window, the base included, most frequent first [16]\n");
+		fprintf(fp_help, "    --hap-dp-mask FILE haplotype indices (0-based) allowed to contribute strings [all]\n");
 		fprintf(fp_help, "    --mate-resolve     an end whose mate has mapq>=--mate-mapq keeps only candidates\n");
 		fprintf(fp_help, "                       compatible with that mate, nearest first, BEFORE mapq; no 0.2/0.8 blend\n");
 		fprintf(fp_help, "    --mate-mapq INT    standalone mapq that makes a mate unambiguous [%d]\n", opt.mate_mapq);
 		fprintf(fp_help, "    --mate-frag INT    typical fragment length: among mate-compatible loci take the one nearest to it,\n");
 		fprintf(fp_help, "                       fragment measured with clips and indels; 0 = the shortest span [%d]\n", opt.mate_frag);
+		fprintf(fp_help, "    --pair-mapq STR    off | vg: pair score dp0+dp1-(d-mate_frag)^2/(2 mate_sd^2 lambda), mapq = softmax over\n");
+		fprintf(fp_help, "                       pairs, ONE mapq min(raw,120)/2 for both ends (as vg giraffe) | vgup: vg, ends only raised [off]\n");
+		fprintf(fp_help, "    --mate-sd INT      s.d. of the fragment length for the --pair-mapq prior; 0 = no prior [%d]\n", opt.mate_sd);
+		fprintf(fp_help, "    --mate-gap INT     --mate-resolve: an end is unambiguous when its best DP score beats every other\n");
+		fprintf(fp_help, "                       candidate by >= INT (a+b = one substitution); 0 = mapq >= --mate-mapq and n_sub 0 [%d]\n", opt.mate_gap);
 		fprintf(fp_help, "    --mapq-quotient    collapse candidate alignments by projection onto the\n");
 		fprintf(fp_help, "                       base reference instead of by sequence name\n");
 		fprintf(fp_help, "    --mapq-prefer-primary  on score ties keep the representative on the base\n");
@@ -484,6 +544,23 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "[ERROR] incorrect input: in the sr mode, please specify no more than two query files.\n");
 		return 1;
 	}
+	if (fn_hap_dp && fn_var_alt) { /* both re-score the same mismatches */
+		fprintf(stderr, "[ERROR] --hap-dp and --var-alt are mutually exclusive\n");
+		return 1;
+	}
+	if (fn_hap_dp && hap_dp_max < 1) {
+		fprintf(stderr, "[ERROR] --hap-dp-max must be >= 1 (the base string counts)\n");
+		return 1;
+	}
+	if (fn_hap_dp_mask && !fn_hap_dp) {
+		fprintf(stderr, "[ERROR] --hap-dp-mask needs --hap-dp\n");
+		return 1;
+	}
+	if (rmin_init() != 0) return 1;
+	if (rmin_active() && (vcf_with_variants == 0 || fnw == 0)) {
+		fprintf(stderr, "[ERROR] --read-min-mode needs --vcf-file-with-variants and -d (index build)\n");
+		return 1;
+	}
 	idx_rdr = mm_idx_reader_open(argv[o.ind], &ipt, fnw);
 	if (idx_rdr == 0) {
 		fprintf(stderr, "[ERROR] failed to open file '%s': %s\n", argv[o.ind], strerror(errno));
@@ -508,6 +585,53 @@ int main(int argc, char *argv[])
 			if (mm_verbose >= 3)
 				fprintf(stderr, "[M::%s] --lift: %d of %u sequences projectable, %ld unresolved, junction from the sidecar for %ld\n",
 						__func__, n_lift, mi->n_seq, (long)n_unres, (long)(mi->lift? mi->lift->n_jct_from_map : 0));
+			if (mm_verbose >= 3 && mi->lift && mi->lift->n_multi > 0)   /* only for a lift map with a fifth column */
+				fprintf(stderr, "[M::%s] --lift: %ld haplotype contigs with several gaps (%ld further gaps in all)\n",
+						__func__, (long)mi->lift->n_multi, (long)mi->lift->n_xg);
+		}
+		if (fn_var_alt) {
+			double t0 = realtime();
+			mm_varalt_t *va;
+			if (mi->flag & MM_I_NO_SEQ) {
+				fprintf(stderr, "[ERROR] --var-alt needs the index with sequences\n");
+				mm_idx_destroy(mi); mm_idx_reader_close(idx_rdr); return 1;
+			}
+			va = mm_varalt_load(mi, fn_var_alt);
+			if (va == NULL) {
+				fprintf(stderr, "[ERROR] --var-alt: failed to read '%s'\n", fn_var_alt);
+				mm_idx_destroy(mi); mm_idx_reader_close(idx_rdr); return 1;
+			}
+			mi->varalt = va;
+			if (mm_verbose >= 3)
+				fprintf(stderr, "[M::%s] --var-alt: %ld lines, %ld positions, %ld ALT alleles kept (%.1f MB); unknown sequence %ld, malformed %ld, "
+						"ALT = base %ld, beyond end %ld, merged duplicates %ld; loaded in %.2f s\n", __func__,
+						(long)va->n_lines, (long)va->n_pos, (long)va->n_alleles, va->n_pos * 5.0 / 1048576.0, (long)va->n_unknown_seq,
+						(long)va->n_bad, (long)va->n_eq_ref, (long)va->n_out_of_range, (long)va->n_dup, realtime() - t0);
+		}
+		if (fn_hap_dp) {
+			double t0 = realtime();
+			mm_hapdp_t *hd;
+			if (mi->flag & MM_I_NO_SEQ) {
+				fprintf(stderr, "[ERROR] --hap-dp needs the index with sequences\n");
+				mm_idx_destroy(mi); mm_idx_reader_close(idx_rdr); return 1;
+			}
+			hd = mm_hapdp_load(mi, fn_hap_dp);
+			if (hd == NULL) {
+				fprintf(stderr, "[ERROR] --hap-dp: failed to read '%s'\n", fn_hap_dp);
+				mm_idx_destroy(mi); mm_idx_reader_close(idx_rdr); return 1;
+			}
+			hd->max_str = hap_dp_max;
+			if (fn_hap_dp_mask && mm_hapdp_load_mask(hd, fn_hap_dp_mask) != 0) {
+				fprintf(stderr, "[ERROR] --hap-dp-mask: failed to read '%s' (or a haplotype index out of range)\n", fn_hap_dp_mask);
+				mm_hapdp_destroy(hd); mm_idx_destroy(mi); mm_idx_reader_close(idx_rdr); return 1;
+			}
+			mi->hapdp = hd;
+			if (mm_verbose >= 3)
+				fprintf(stderr, "[M::%s] --hap-dp: %ld lines, %ld SNV records kept, %d haplotypes, max strings %d, mask %s; unknown sequence %ld, "
+						"malformed %ld, ALT = base %ld, beyond end %ld, no carrier %ld, merged duplicates %ld, carrier conflicts %ld; loaded in %.2f s\n",
+						__func__, (long)hd->n_lines, (long)hd->n_rec, hd->n_hap, hd->max_str, hd->has_allow ? "yes" : "no",
+						(long)hd->n_unknown_seq, (long)hd->n_bad, (long)hd->n_eq_ref, (long)hd->n_out_of_range, (long)hd->n_nocarrier,
+						(long)hd->n_dup, (long)hd->n_conflict, realtime() - t0);
 		}
 		if ((opt.flag & MM_F_CIGAR) && (mi->flag & MM_I_NO_SEQ)) {
 			fprintf(stderr, "[ERROR] the prebuilt index doesn't contain sequences.\n");
@@ -537,6 +661,7 @@ int main(int argc, char *argv[])
 					__func__, realtime() - mm_realtime0, cputime() / (realtime() - mm_realtime0), mi->n_seq);
 		if (argc != o.ind + 1) mm_mapopt_update(&opt, mi);
 		if (mm_verbose >= 3) mm_idx_stat(mi);
+		rmin_report(stderr);
 		if (fn_bed_junc) {
 			mm_idx_bed_read(mi, fn_bed_junc, 1);
 			if (mi->I == 0 && mm_verbose >= 2)
@@ -576,6 +701,15 @@ int main(int argc, char *argv[])
 			fprintf(stderr, "ERROR: failed to map the query file\n");
 			exit(EXIT_FAILURE);
 		}
+	}
+	if (idx_rdr->error || idx_rdr->n_parts == 0) {
+		if (idx_rdr->error)
+			fprintf(stderr, "[ERROR] could not %s '%s' at part %d: %s\n",
+					idx_rdr->is_idx ? "read binary index" : "build reference index",
+					argv[o.ind], idx_rdr->n_parts + 1, strerror(idx_rdr->error));
+		else fprintf(stderr, "[ERROR] no index or reference sequences read from '%s'\n", argv[o.ind]);
+		mm_idx_reader_close(idx_rdr);
+		return 1;
 	}
 	n_parts = idx_rdr->n_parts;
 	mm_idx_reader_close(idx_rdr);

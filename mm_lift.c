@@ -1,12 +1,10 @@
-/* Projection of augmentation-contig coordinates onto the base reference.
- * See mm_lift.h for the geometry and for where every constant comes from. */
+/* Projection of augmentation-contig coordinates onto the base reference */
 
 #include <string.h>
 #include <stdlib.h>
 #include "mm_lift.h"
 
-/* BAM/minimap2 CIGAR opcodes; mirrors MM_CIGAR_* in minimap.h so this file can
- * be unit-tested without pulling in the whole aligner. */
+/* CIGAR opcodes, as MM_CIGAR_* in minimap.h */
 #define OP_M 0
 #define OP_I 1
 #define OP_D 2
@@ -39,8 +37,7 @@ int mm_lift_parse_name(const char *name, int32_t *chrom_len, int64_t *pos)
 	int64_t v;
 
 	if (name == NULL) return 0;
-	/* last occurrence, so a chromosome name containing the token cannot
-	 * shadow the split */
+	/* last occurrence */
 	for (p = name; (q = strstr(p, TOK)) != NULL; p = q + 1) tag = q;
 	if (tag == NULL || tag == name) return 0;  /* no token, or empty chrom */
 
@@ -50,6 +47,13 @@ int mm_lift_parse_name(const char *name, int32_t *chrom_len, int64_t *pos)
 	for (; *p >= '0' && *p <= '9'; ++p) {
 		if (v > (INT64_MAX - (*p - '0')) / 10) return 0;  /* overflow */
 		v = v * 10 + (*p - '0');
+	}
+	if (p[0] == '_' && p[1] == 'h') {          /* "_h<digits>" suffix */
+		const char *s = p + 2;
+		if (*s < '0' || *s > '9') return 0;
+		while (*s >= '0' && *s <= '9') ++s;
+		if (*s != '\0') return 0;
+		p = s;
 	}
 	if (*p != '\0') return 0;                  /* trailing junk */
 
@@ -61,18 +65,28 @@ int mm_lift_parse_name(const char *name, int32_t *chrom_len, int64_t *pos)
 int64_t mm_lift_pos(const mm_lift_rec_t *rec, int64_t c)
 {
 	int z = mm_lift_zone(rec, c);
-	if (z == MM_LIFT_ZONE_A)   return rec->off_a + c;
-	if (z == MM_LIFT_ZONE_INS) return rec->off_a + rec->jct;
-	return mm_lift_off_b(rec) + c;
+	if (!(z & 1)) return mm_lift_block_off(rec, z / 2) + c;               /* a block */
+	return mm_lift_block_off(rec, z / 2) + mm_lift_gap_at(rec, z / 2).jct;   /* novel bases: the junction */
 }
 
-/* Append one op, merging with the previous when the opcode matches and
- * dropping zero-length ops.  Keeps guarantee G3. */
+/* 1 iff contig offset c is at or inside the novel bases of a gap and the
+ * alignment (ending at c_end) has no reference coverage beyond them */
+static int at_tail_gap(const mm_lift_rec_t *rec, int64_t c, int64_t c_end)
+{
+	int32_t g, n = mm_lift_n_gaps(rec);
+	for (g = 0; g < n; ++g) {
+		mm_lift_gap_t x = mm_lift_gap_at(rec, g);
+		int64_t e = (int64_t)x.jct + x.ins_len;
+		if (x.jct <= c && c <= e && c_end <= e) return 1;
+	}
+	return 0;
+}
+
+/* CIGAR buffer; cb_push() merges equal adjacent ops and drops empty ones */
 typedef struct {
 	uint32_t *a;
 	int32_t n, cap;
-	int over;      /* set once capacity is exceeded; n keeps counting so the
-	                * caller learns the required size */
+	int over;      /* capacity exceeded; n keeps counting the required size */
 } cig_buf_t;
 
 static void cb_push(cig_buf_t *b, int32_t len, int op)
@@ -100,94 +114,84 @@ int mm_lift_cigar(const mm_lift_rec_t *rec, int32_t ctg_len,
 	cig_buf_t b;
 	int64_t c = rs;                 /* current contig offset */
 	int32_t i;
-	int32_t lead_clip = 0, tail_clip = 0;   /* query bases pushed out of the
-	                                         * alignment by the novel-ALT gap */
+	int32_t lead_clip = 0, tail_clip = 0;   /* query bases turned into clipping */
 	int started = 0;                /* have we emitted a ref-consuming op? */
 	int64_t first_ref = 0;          /* base-ref coord of the first such op */
-	int crossed = 0;                /* emitted the junction deletion already */
-	int saw_A = 0, saw_B = 0;       /* ref-consuming coverage per zone */
-	int64_t ref_span = 0;           /* for the G1 self-check */
+	int32_t cur_blk = -1;           /* block of the last anchored base */
+	int64_t c_end;                  /* contig end of the alignment */
+	int64_t ref_span = 0;           /* reference span emitted */
 	(void)ctg_len;
 
 	b.a = cigar_out; b.n = 0; b.cap = cap; b.over = 0;
 
-	/* ---- pass 1: does the alignment touch anything outside the gap? ---- */
+	/* pass 1: reject an alignment with no reference span or lying wholly
+	 * inside the novel bases of one gap */
 	{
 		int64_t cc = rs;
-		for (i = 0; i < n_cigar; ++i) {
-			int op = CIG_OP(cigar[i]);
-			int32_t l = CIG_LEN(cigar[i]);
-			if (!op_consumes_ref(op)) continue;
-			if (cc < rec->jct) saw_A = 1;
-			if (cc + l > (int64_t)rec->jct + rec->ins_len) saw_B = 1;
-			cc += l;
+		for (i = 0; i < n_cigar; ++i)
+			if (op_consumes_ref(CIG_OP(cigar[i]))) cc += CIG_LEN(cigar[i]);
+		c_end = cc;
+		if (c_end <= rs) return -2;
+		{
+			int z0 = mm_lift_zone(rec, rs);
+			if ((z0 & 1) && c_end <= mm_lift_zone_end(rec, z0)) return -2;
 		}
-		if (!saw_A && !saw_B) return -2;
 	}
 
-	/* ---- pass 2: rewrite ---- */
+	/* pass 2: rewrite */
 	for (i = 0; i < n_cigar; ++i) {
 		int op = CIG_OP(cigar[i]);
 		int32_t l = CIG_LEN(cigar[i]);
 
 		if (!op_consumes_ref(op)) {
-			/* query-only (I/S/P) or nothing-consuming: pass through, but a
-			 * leading insertion before any anchored op has to become clipping */
+			/* pass through; a leading I, or one at a gap with nothing
+			 * anchored after it, becomes clipping */
 			if (op == OP_I && !started) lead_clip += l;
-			else if (op == OP_I && !saw_B && c >= rec->jct) tail_clip += l;
+			else if (op == OP_I && at_tail_gap(rec, c, c_end)) tail_clip += l;
 			else cb_push(&b, l, op);
 			continue;
 		}
 
-		/* split [c, c+l) across the three zones */
+		/* split [c, c+l) across the zones */
 		while (l > 0) {
 			int z = mm_lift_zone(rec, c);
-			int64_t zone_end;
+			int64_t zone_end = mm_lift_zone_end(rec, z);
 			int32_t take;
 
-			if (z == MM_LIFT_ZONE_A)        zone_end = rec->jct;
-			else if (z == MM_LIFT_ZONE_INS) zone_end = (int64_t)rec->jct + rec->ins_len;
-			else                            zone_end = INT64_MAX;
-
 			take = (int32_t)(zone_end - c < l ? zone_end - c : l);
-			if (take <= 0) break;   /* defensive; cannot happen */
+			if (take <= 0) break;   /* cannot happen */
 
-			if (z == MM_LIFT_ZONE_A) {
-				if (!started) { started = 1; first_ref = rec->off_a + c; }
-				cb_push(&b, take, op);
-				ref_span += take;
-			} else if (z == MM_LIFT_ZONE_INS) {
-				/* contig bases with no base-reference counterpart */
-				if (op == OP_M || op == OP_EQ || op == OP_X) {
-					/* query bases were aligned to novel sequence -> insertion,
-					 * unless they sit at an end, where they become clipping */
-					if (!started)          lead_clip += take;
-					else if (!saw_B)       tail_clip += take;
-					else                   cb_push(&b, take, OP_I);
-				}
-				/* D/N inside the gap: the read skips contig bases that the base
-				 * reference does not have either -> emit nothing */
-			} else { /* MM_LIFT_ZONE_B */
-				if (!crossed && started && rec->del_len > 0) {
-					/* G5: only when there is ref-consuming coverage on both
-					 * sides.  saw_A is that guarantee for the left side. */
-					cb_push(&b, rec->del_len, OP_D);
-					ref_span += rec->del_len;
-					crossed = 1;
+			if (!(z & 1)) {         /* block z/2 */
+				int32_t blk = z / 2, g;
+				if (started && blk > cur_blk) {
+					/* deletions of the gaps crossed, covered on both sides */
+					for (g = cur_blk; g < blk; ++g) {
+						int32_t dl = mm_lift_gap_at(rec, g).del_len;
+						if (dl > 0) { cb_push(&b, dl, OP_D); ref_span += dl; }
+					}
 				}
 				if (!started) {
 					started = 1;
-					first_ref = mm_lift_off_b(rec) + c;
+					first_ref = mm_lift_block_off(rec, blk) + c;
 				}
+				cur_blk = blk;
 				cb_push(&b, take, op);
 				ref_span += take;
+			} else {                /* novel bases of gap z/2 */
+				if (op == OP_M || op == OP_EQ || op == OP_X) {
+					/* aligned to novel sequence: insertion, or clipping at an end */
+					if (!started)                 lead_clip += take;
+					else if (c_end <= zone_end)   tail_clip += take;
+					else                          cb_push(&b, take, OP_I);
+				}
+				/* D/N inside the gap: nothing to emit */
 			}
 			c += take;
 			l -= take;
 		}
 	}
 
-	/* ---- trim leading/trailing D or N (guarantee G4) ---- */
+	/* trim leading/trailing D/N */
 	if (!b.over) {
 		int32_t lo = 0, hi = b.n;
 		while (lo < hi && (CIG_OP(b.a[lo]) == OP_D || CIG_OP(b.a[lo]) == OP_N)) {
@@ -212,8 +216,7 @@ int mm_lift_cigar(const mm_lift_rec_t *rec, int32_t ctg_len,
 	if (b.over) return -1;
 
 	*rs_out = first_ref;
-	/* lead_clip/tail_clip are in CIGAR (reference) order; qs/qe are in
-	 * forward-read order.  For a reverse alignment the two are mirrored. */
+	/* clips are in reference order, qs/qe in forward-read order */
 	if (!rev) {
 		*qs_out = qs + lead_clip;
 		*qe_out = qe - tail_clip;
@@ -225,20 +228,13 @@ int mm_lift_cigar(const mm_lift_rec_t *rec, int32_t ctg_len,
 	return 0;
 }
 
-/* ---- same-locus test: shared diagonal on a common query interval ---- */
+/* same-locus test: shared diagonal on a common query interval */
 
 typedef struct { int32_t qs, qe; int64_t diag; } diag_seg_t;
 
-/* Enumerate the diagonals of an alignment as (forward-read interval, diagonal).
- * The CIGAR is walked in reference order.  qs/qe are FORWARD-read coordinates
- * (minimap2 convention), so on the forward strand the read position at the
- * reference-left end is qs and grows with t (diagonal t - q); on the reverse
- * strand it is qe and shrinks with t (anti-diagonal t + q).  Using qs for both
- * strands (the earlier version) was right only when the two clips were equal:
- * a reverse alignment clipped at one end got a diagonal off by the clip length,
- * so a clipped base representation and the contig's projection of the same
- * read at the same place looked like two loci -- two thirds of the mr:i marks
- * on L1aug were such duplicates.  Returns the number written; cap bounds it. */
+/* Match blocks of an alignment as (forward-read interval, diagonal); the
+ * diagonal is t-q on the forward strand and t+q on the reverse. Returns the
+ * number written, at most cap. */
 static int32_t diag_segs(const mm_reg1_t *r, diag_seg_t *out, int32_t cap)
 {
 	int32_t n = 0;

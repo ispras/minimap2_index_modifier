@@ -84,7 +84,7 @@ uint32_t ks_ksmall_uint32_t(size_t n, uint32_t arr[], size_t kk);
 
 void mm_sketch(void *km, const char *str, int len, int w, int k, uint32_t rid, int is_hpc, mm128_v *p);
 void mm_idx_manipulate(mm_idx_t * mi, char *vcf_with_variants);
-void mm_idx_manipulate_phased(mm_idx_t * mi, char * fname, mm128_v *p, vcf_ctx_t * ctx, char * contig_name);
+int mm_idx_manipulate_phased(mm_idx_t * mi, char * fname, mm128_v *p, vcf_ctx_t * ctx, char * contig_name);
 int  vcf_open_synced(const char * fname, int n_threads, vcf_ctx_t * ctx);
 void vcf_close_synced(vcf_ctx_t * ctx);
 void add_variants(mm_idx_t * mi, const char * CHR, char ** REF_arr, char ** ALT_arr, unsigned long * POS_all, int N_SNP, unsigned long curr_pos, mm128_v *p);
@@ -142,6 +142,9 @@ void mm_est_err(const mm_idx_t *mi, int qlen, int n_regs, mm_reg1_t *regs, const
 mm_seg_t *mm_seg_gen(void *km, uint32_t hash, int n_segs, const int *qlens, int n_regs0, const mm_reg1_t *regs0, int *n_regs, mm_reg1_t **regs, const mm128_t *a);
 void mm_seg_free(void *km, int n_segs, mm_seg_t *segs);
 void mm_pair(void *km, int max_gap_ref, int dp_bonus, int sub_diff, int match_sc, const int *qlens, int *n_regs, mm_reg1_t **regs, int no_blend);
+void mm_pair_core(void *km, int max_gap_ref, int dp_bonus, int sub_diff, int match_sc, const int *qlens, int *n_regs, mm_reg1_t **regs, int no_blend,
+				  int pair_mode, double frag_mu, double frag_sd, double lambda);
+double mm_pair_log_base(int a, int b);
 void mm_lift_refresh(const mm_idx_t *mi, int qlen, const char *qstr, mm_reg1_t *r, int what);
 int mm_lift_realign(void *km, const mm_mapopt_t *opt, const mm_idx_t *mi, int qlen, const char *qstr, mm_reg1_t *r);
 

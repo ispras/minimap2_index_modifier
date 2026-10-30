@@ -24,6 +24,10 @@ struct node {
 };
 
 bool isListEmpty();
-void handleGTList(mm_idx_t * mi, bcf_hdr_t *hdr, mm128_v *p);
-void insertatbegin(unsigned long pos, bcf1_t *rec, int CHR_ID, char * REF, char * ALT);
+int mm_gt_validate_file(const char *filename);
+int mm_gt_decode_window(bcf_hdr_t *hdr, struct node *first, struct node *end,
+                        char **carriers, int *rows, int *stride);
+int calculate_haplotypes(mm_idx_t *, bcf_hdr_t *, struct node *, struct node *, unsigned long, mm128_v *);
+int handleGTList(mm_idx_t * mi, bcf_hdr_t *hdr, mm128_v *p);
+int insertatbegin(unsigned long pos, bcf1_t *rec, int CHR_ID, char * REF, char * ALT);
 void deleteList();

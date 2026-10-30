@@ -1,6 +1,7 @@
 from libc.stdint cimport uint8_t, int8_t
 from libc.stdlib cimport free
 cimport cmappy
+import os
 import sys
 
 __version__ = '2.30'
@@ -140,6 +141,7 @@ cdef class Aligner:
 					self.map_opt.sc_ambi = scoring[6]
 
 		cdef cmappy.mm_idx_reader_t *r;
+		cdef int index_error = 0
 
 		if seq is None:
 			if fn_idx_out is None:
@@ -147,14 +149,24 @@ cdef class Aligner:
 			else:
 				r = cmappy.mm_idx_reader_open(str.encode(fn_idx_in), &self.idx_opt, str.encode(fn_idx_out))
 			if r is not NULL:
-				self._idx = cmappy.mm_idx_reader_read(r, n_threads) # NB: ONLY read the first part
+				# The existing plain API has no modifier-VCF argument; read only the first part.
+				self._idx = cmappy.mm_idx_reader_read(r, n_threads, NULL)
+				index_error = r.error
 				cmappy.mm_idx_reader_close(r)
-				cmappy.mm_mapopt_update(&self.map_opt, self._idx)
-				cmappy.mm_idx_index_name(self._idx)
+				if index_error:
+					raise OSError(index_error, os.strerror(index_error), fn_idx_in)
+				if self._idx is not NULL and self._idx.n_seq == 0:
+					# Empty text input can produce an allocated index with no sequences.
+					cmappy.mm_idx_destroy(self._idx)
+					self._idx = NULL
+				if self._idx is not NULL:
+					cmappy.mm_mapopt_update(&self.map_opt, self._idx)
+					cmappy.mm_idx_index_name(self._idx)
 		else:
 			self._idx = cmappy.mappy_idx_seq(self.idx_opt.w, self.idx_opt.k, self.idx_opt.flag&1, self.idx_opt.bucket_bits, str.encode(seq), len(seq))
-			cmappy.mm_mapopt_update(&self.map_opt, self._idx)
-			self.map_opt.mid_occ = 1000 # don't filter high-occ seeds
+			if self._idx is not NULL:
+				cmappy.mm_mapopt_update(&self.map_opt, self._idx)
+				self.map_opt.mid_occ = 1000 # don't filter high-occ seeds
 
 	def __dealloc__(self):
 		if self._idx is not NULL:
@@ -229,13 +241,13 @@ cdef class Aligner:
 		return r
 
 	@property
-	def k(self): return self._idx.k
+	def k(self): return self._idx.k if self._idx is not NULL else 0
 
 	@property
-	def w(self): return self._idx.w
+	def w(self): return self._idx.w if self._idx is not NULL else 0
 
 	@property
-	def n_seq(self): return self._idx.n_seq
+	def n_seq(self): return self._idx.n_seq if self._idx is not NULL else 0
 
 	@property
 	def seq_names(self):

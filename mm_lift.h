@@ -1,91 +1,11 @@
 #ifndef MM_LIFT_H
 #define MM_LIFT_H
 
-/* ---------------------------------------------------------------------------
- * In-aligner projection of augmentation-contig coordinates onto the base
- * reference.
+/* Projection of augmentation-contig coordinates onto the base reference.
  *
- * WHY THIS EXISTS
- * ---------------
- * The augmented reference is T' = T + C, where T is GRCh38 (195 sequences) and
- * C is 569,870 short contigs, each carrying one known indel's ALT allele
- * between 100 bp of its native flanks.  Today a read that lands on a member of
- * C is rewritten into T coordinates *after* alignment by levioSAM2, driven by
- * a separate chain file.  That costs 11 h 09 m per 40x genome
- * (scratchpad/remote/costs.md, table b.1, sourced from bgi/log/progress.txt)
- * and the chain is an independent artifact that can — and does — disagree with
- * the FASTA: only 195 of 570,065 chain records are internally consistent
- * (0.0342 %, log/t1pilot/chainfix.log step [3]), and those 195 are the
- * whole-chromosome pass-through records, i.e. *every* contig record is wrong.
- *
- * This header defines the projection as data owned by the index, so that
- * minimap2 can emit base-reference coordinates directly and no second artifact
- * exists to drift.
- *
- * THE GEOMETRY, DERIVED FROM THE GENERATOR
- * ----------------------------------------
- * gen2/contig_generation.FIXED.py builds each contig from a VCF record
- * (chrom, pos, REF, ALT) with contig_half = 100 as:
- *
- *     contig = T[pos-100 .. pos-1] ++ ALT ++ T[pos+|REF| .. pos+|REF|+99]
- *              \__ 100 bp left __/         \______ 100 bp right flank ____/
- *
- * VCF indel convention puts the anchor base at pos in both REF[0] and ALT[0],
- * so contig[0..100] is 101 contiguous bases of T ending at pos.  Therefore the
- * projection is a two-block affine map with a single junction:
- *
- *     block A : contig [0, jct)                -> T0 [off_a,            off_a + jct)
- *     (gap)   : contig [jct, jct+ins_len)      -> nothing   (novel ALT bases)
- *               T0     [off_a+jct, +del_len)   -> nothing   (deleted REF bases)
- *     block B : contig [jct+ins_len, len)      -> T0 [off_a + jct + del_len, ...)
- *
- * with, for this reference build,
- *     jct     = 101                 (contig_half + 1)
- *     off_a   = pos - 101           (0-based T coordinate of contig offset 0)
- *     ins_len = max(|ALT| - |REF|, 0)
- *     del_len = max(|REF| - |ALT|, 0)
- *
- * Exactly one of ins_len / del_len is non-zero: the generator's filter keeps
- * only records where |ALT| > |REF| (insertion) or |ALT| < |REF| (deletion).
- *
- * Worked against the real chain (data/chain_sample.txt, from gen2/fixed2.chain):
- *   chr1_contig_30884, len 205, chain "101 4<TAB>0" -> insertion, ins_len 4,
- *      off_a = 30884-101 = 30783, which is the chain's own qStart.
- *   chr1_contig_54750, len 201, chain "101 0<TAB>4" -> deletion, del_len 4,
- *      off_a = 54750-101 = 54649, again the chain's qStart.
- * The chain's *block lengths* are wrong (99 instead of 100 for insertions,
- * 98+|REF| instead of 100 for deletions) but its header coordinates are right,
- * which is why the map below is derivable and the chain is not trustworthy.
- *
- * WHAT IS AND IS NOT DERIVABLE FROM THE INDEX AS IT STANDS
- * --------------------------------------------------------
- * mm_idx_dump() already stores every sequence's name and length
- * (index.c:598-607), so (name, len) is free at load time.  From those alone:
- *     pos     = atoi(strstr(name, "_contig_") + 8)      -> off_a = pos - 101
- *     |ALT|   = len - 200
- * and for an insertion |REF| = 1, so ins_len = len - 201.  That closes the map
- * for every insertion contig.  It does NOT close it for a deletion, because a
- * deletion's |REF| is nowhere in (name, len).
- *
- * Measured on the production reference (data/fixed2.fasta.fai, 569,870
- * contigs), the ambiguity is almost empty:
- *     len == 201                348,334 contigs  -> |ALT| = 1, must be a
- *                                                   deletion (the generator
- *                                                   requires |ALT| >= 5 for
- *                                                   insertions), |REF| unknown
- *     len in {203, 204}                  91      -> same, |REF| unknown
- *     len >= 205                   221,445      -> 221,283 insertions (fully
- *                                                   determined) + 162 deletions
- * Total deletions 348,587 and insertions 221,283, which reproduces
- * log/t1pilot/result.txt exactly.  So del_len must be supplied for 348,587
- * contigs and only 162 of them are length-ambiguous with an insertion.
- *
- * CONCLUSION: one int32 per contig (the signed indel delta d = |ALT| - |REF|)
- * is the whole missing payload.  At 569,870 contigs that is 2.28 MB, against a
- * 9,479,433,012-byte index (costs.md table c) -- 0.024 %.  Compare the .clft
- * chain index it replaces: 271,714,958 bytes, built in 82 s
- * (log/t1pilot/chainfix.log step [4]).
- * ------------------------------------------------------------------------- */
+ * A contig is a base-reference window with one or more indel ALT alleles
+ * spliced in. Its map to the base is piecewise affine: blocks separated by
+ * gaps, each gap inserting ins_len novel bases and/or skipping del_len bases. */
 
 #include <stdint.h>
 #include "minimap.h"
@@ -94,41 +14,67 @@
 extern "C" {
 #endif
 
-/* Per-sequence projection record.  One entry per sequence in mm_idx_t::seq,
- * indexed by rid, so lookup is an array subscript on the hot path. */
+/* Gap g is (jct_g, ins_g, del_g) in contig coordinates; jct_g is the contig
+ * offset of the first base after block g. Block offsets are derived:
+ * off_0 = off_a, off_{b+1} = off_b + del_b - ins_b. Gap 0 is stored in the
+ * record, further gaps in the pool mm_lift_t::xg. */
+#define MM_LIFT_MAX_GAPS 8   /* gaps per contig, first included; the build rejects more */
+
 typedef struct {
-	int32_t base_rid;  /* rid of the base sequence this contig projects onto;
-	                    * -1 means "this sequence IS a base sequence" and the
-	                    * projection is the identity. */
-	int32_t jct;       /* contig offset of the first base after block A.
-	                    * 101 for this reference build.  Meaningless when
-	                    * base_rid < 0. */
-	int32_t ins_len;   /* contig bases at [jct, jct+ins_len) with no counterpart
-	                    * in the base reference (novel ALT bases). >= 0 */
-	int32_t del_len;   /* base-reference bases at [off_a+jct, +del_len) with no
-	                    * counterpart in the contig (deleted REF bases). >= 0 */
+	int32_t jct, ins_len, del_len;   /* one junction, contig coordinates, as in mm_lift_rec_t */
+} mm_lift_gap_t;
+
+/* Per-sequence projection record, indexed by rid */
+typedef struct {
+	int32_t base_rid;  /* base sequence rid; -1 = this is a base sequence (identity) */
+	int32_t jct;       /* contig offset of the first base after block A */
+	int32_t ins_len;   /* novel contig bases at [jct, jct+ins_len) */
+	int32_t del_len;   /* base bases at [off_a+jct, +del_len) absent from the contig */
 	int64_t off_a;     /* 0-based base-reference coordinate of contig offset 0 */
+	int32_t n_xgap;    /* number of gaps after the first */
+	const mm_lift_gap_t *xgap;   /* ascending jct; points into mm_lift_t::xg, NULL if n_xgap == 0 */
 } mm_lift_rec_t;
 
-/* Projection table.  Owned by the index; n == mi->n_seq, indexed by rid. */
+/* Projection table owned by the index; n == mi->n_seq */
 typedef struct mm_lift_s {
 	int32_t n;
 	mm_lift_rec_t *a;
-	int64_t n_jct_from_map;   /* contigs whose junction came from the sidecar (4th column) */
+	int64_t n_jct_from_map;   /* contigs whose jct came from the map file */
+	mm_lift_gap_t *xg;        /* pool of the extra gaps */
+	int64_t n_xg;             /* entries in xg */
+	int64_t n_multi;          /* contigs with more than one gap */
 } mm_lift_t;
 
-/* off_b: base-reference coordinate of contig offset 0 *for block B*.
- * Derived, never stored, so the two cannot drift.
- *    contig c in block B  ->  off_b(rec) + c
- * Identity: off_b = off_a + del_len - ins_len. */
+/* base coordinate of contig offset 0 for block B (after the first gap) */
 static inline int64_t mm_lift_off_b(const mm_lift_rec_t *rec)
 {
 	return rec->off_a + rec->del_len - rec->ins_len;
 }
 
-/* Reference-consuming span of a packed CIGAR (M/D/N/=/X).  Used to recompute
- * mm_reg1_t::re after the splice, so that re always equals rs + span and the
- * two cannot drift. */
+/* number of gaps; 1 for a single-indel contig */
+static inline int32_t mm_lift_n_gaps(const mm_lift_rec_t *rec)
+{
+	return 1 + (rec->xgap != NULL ? rec->n_xgap : 0);
+}
+
+/* gap g (0-based) */
+static inline mm_lift_gap_t mm_lift_gap_at(const mm_lift_rec_t *rec, int32_t g)
+{
+	mm_lift_gap_t x;
+	if (g == 0) { x.jct = rec->jct; x.ins_len = rec->ins_len; x.del_len = rec->del_len; }
+	else x = rec->xgap[g - 1];
+	return x;
+}
+
+/* base coordinate of contig offset 0 for block b (0..n_gaps) */
+static inline int64_t mm_lift_block_off(const mm_lift_rec_t *rec, int32_t b)
+{
+	int64_t o = rec->off_a; int32_t g;
+	for (g = 0; g < b; ++g) { mm_lift_gap_t x = mm_lift_gap_at(rec, g); o += x.del_len - x.ins_len; }
+	return o;
+}
+
+/* reference-consuming span of a packed CIGAR (M/D/N/=/X) */
 static inline int64_t mm_lift_ref_span(const uint32_t *cigar, int32_t n)
 {
 	int64_t s = 0; int32_t i;
@@ -140,8 +86,7 @@ static inline int64_t mm_lift_ref_span(const uint32_t *cigar, int32_t n)
 	return s;
 }
 
-/* Query-consuming span of a packed CIGAR (M/I/=/X), the counterpart of
- * mm_lift_ref_span; mm_lift_realign checks the derived CIGAR against it. */
+/* query-consuming span of a packed CIGAR (M/I/=/X) */
 static inline int64_t mm_lift_query_span(const uint32_t *cigar, int32_t n)
 {
 	int64_t s = 0; int32_t i;
@@ -153,201 +98,81 @@ static inline int64_t mm_lift_query_span(const uint32_t *cigar, int32_t n)
 	return s;
 }
 
-/* Zone of a contig offset.  0 = block A, 1 = the novel-ALT gap, 2 = block B. */
+/* Zone of a contig offset: 2b = block b, 2g+1 = novel bases of gap g */
 #define MM_LIFT_ZONE_A   0
 #define MM_LIFT_ZONE_INS 1
 #define MM_LIFT_ZONE_B   2
 
 static inline int mm_lift_zone(const mm_lift_rec_t *rec, int64_t c)
 {
-	if (c < rec->jct) return MM_LIFT_ZONE_A;
-	if (c < (int64_t)rec->jct + rec->ins_len) return MM_LIFT_ZONE_INS;
-	return MM_LIFT_ZONE_B;
+	int32_t g, n = mm_lift_n_gaps(rec);
+	for (g = 0; g < n; ++g) {
+		mm_lift_gap_t x = mm_lift_gap_at(rec, g);
+		if (c < x.jct) return 2 * g;
+		if (c < (int64_t)x.jct + x.ins_len) return 2 * g + 1;
+	}
+	return 2 * n;
 }
 
-/* ---------------------------------------------------------------------------
- * Name parsing.
- *
- * Contract: returns 1 and fills *chrom_len (length of the chromosome-name
- * prefix within name) and *pos (the 1-based variant coordinate) iff name
- * matches "<chrom>_contig_<digits>" with at least one digit and nothing after
- * them.  Returns 0 otherwise, leaving the outputs untouched.
- *
- * Uses the LAST occurrence of "_contig_", so a chromosome whose own name
- * contains the token cannot shadow the split.  strstr()-based parsing in
- * map.c:256 uses the first occurrence; that is a latent difference and this
- * function is the one to keep.
- *
- * NOTE this deliberately does NOT reproduce the truncation bug in
- * gen2/contig_generation.py (the superseded generator), whose
- * `contig_header[1:5]` turns ">chr10_contig_N" into "chr1".  The production
- * generator contig_generation.FIXED.py splits on "_" instead and is correct;
- * the bug is recorded here only so a reader comparing the two is not confused.
- * ------------------------------------------------------------------------- */
+/* first contig offset AFTER zone z; INT64_MAX for the last block */
+static inline int64_t mm_lift_zone_end(const mm_lift_rec_t *rec, int z)
+{
+	int32_t n = mm_lift_n_gaps(rec);
+	mm_lift_gap_t x;
+	if (z >= 2 * n) return INT64_MAX;
+	x = mm_lift_gap_at(rec, z / 2);
+	return (z & 1) ? (int64_t)x.jct + x.ins_len : (int64_t)x.jct;
+}
+
+/* Parse "<chrom>_contig_<pos>" or "<chrom>_contig_<pos>_h<serial>" (last
+ * "_contig_" wins). On match returns 1 and sets *chrom_len (prefix length) and
+ * *pos (1-based); otherwise returns 0 and leaves the outputs untouched. */
 int mm_lift_parse_name(const char *name, int32_t *chrom_len, int64_t *pos);
 
-/* ---------------------------------------------------------------------------
- * Project a single contig offset onto the base reference.
- *
- * Contract:
- *   rec must have base_rid >= 0.
- *   c is a 0-based contig offset in [0, contig_len].
- *   Returns the 0-based base-reference coordinate, choosing the block that
- *   contains c.  For c in the novel-ALT gap there is no counterpart; the
- *   convention is to return the junction's base-reference coordinate
- *   (off_a + jct), i.e. to collapse the gap to a point.  Callers that must
- *   distinguish should test mm_lift_zone() first.
- * ------------------------------------------------------------------------- */
+/* Project 0-based contig offset c (rec->base_rid >= 0) to a 0-based base
+ * coordinate. An offset inside a novel-ALT gap maps to the gap's junction. */
 int64_t mm_lift_pos(const mm_lift_rec_t *rec, int64_t c);
 
-/* ---------------------------------------------------------------------------
- * Project an alignment: rewrite start coordinate and CIGAR from contig space
- * into base-reference space.
+/* Project an alignment: rewrite start and CIGAR from contig to base space.
  *
- * Input:
- *   rec        projection record, base_rid >= 0
- *   ctg_len    length of the contig (mi->seq[rid].len)
- *   rs         0-based contig start of the alignment (mm_reg1_t::rs)
- *   cigar,n_cigar   packed minimap2/BAM CIGAR (len<<4 | op), as in
- *                   mm_extra_t::cigar.  Soft/hard clips are NOT included:
- *                   minimap2 keeps clipping outside r->p->cigar and synthesises
- *                   it in write_sam_cigar() (format.c:489-491) from r->qs/r->qe.
- *   qs, qe     query interval of the alignment (mm_reg1_t::qs/qe)
- *   rev        mm_reg1_t::rev.  Needed because the CIGAR is written in
- *              REFERENCE order while qs/qe are in FORWARD-READ order, so for a
- *              reverse alignment the clipping that precedes the CIGAR sits at
- *              the 3' end of the forward read.  write_sam_cigar() encodes the
- *              same asymmetry: clip_len[0] = rev ? qlen-qe : qs
- *              (format.c:490-491).  Getting this backwards still satisfies
- *              "CIGAR query length == SEQ length", so no length check can
- *              catch it -- only the side the soft clip lands on is wrong.
+ * rs is the 0-based contig start; cigar is packed (len<<4|op) without clips;
+ * qs/qe/rev are as in mm_reg1_t (the CIGAR is in reference order, qs/qe in
+ * forward-read order). Query bases at either end that fall in a novel-ALT gap
+ * become clipping via *qs_out and *qe_out, which the caller must write back.
+ * cigar_out is caller-allocated with capacity cap.
  *
- * Output (all written only on success):
- *   *rs_out        0-based base-reference start
- *   *qs_out,*qe_out  possibly tightened query interval: when the alignment
- *                  begins or ends inside the novel-ALT gap those query bases
- *                  have nowhere to go and are converted to clipping by moving
- *                  qs/qe.  Callers must write these back into the mm_reg1_t so
- *                  that write_sam_cigar()'s clip_len[] stays consistent.
- *   cigar_out      caller-allocated buffer, capacity cap ops
- *   *n_out         number of ops written
- *
- * Returns:
- *    0  success
- *   -1  buffer too small (cap insufficient); *n_out holds the required count
- *   -2  the alignment lies entirely inside the novel-ALT gap, so it has no
- *       base-reference representation at all.  The caller must decide policy
- *       (drop, emit unmapped, or retain contig coordinates).  Cannot occur for
- *       this reference with >=150 bp reads: the generator rejects ALT longer
- *       than 100 bp (contig_generation.FIXED.py, `if len(fields[4]) > 100`), so
- *       the gap is at most 99 bp and cannot contain a whole read.
- *
- * Guarantees on the emitted CIGAR:
- *   G1  reference-consuming length equals the base-reference span implied by
- *       the projection (no invented and no lost reference bases);
- *   G2  query-consuming length equals qe_out - qs_out;
- *   G3  no zero-length ops, no two adjacent ops with the same opcode;
- *   G4  does not begin or end with D or N;
- *   G5  a `del_len D` op appears at the junction if and only if the alignment
- *       has reference-consuming coverage strictly on both sides of it.  This is
- *       the op levioSAM2 emits unconditionally from the chain, which is the
- *       measured +L pathology when the FASTA and the chain disagree.
- *
- * NOT guaranteed, and deliberately so: indel placement is not normalised
- * against the base reference.  See DESIGN.md class C3 -- left-shifting a
- * junction indel to its leftmost equivalent position is a separate, explicit
- * pass that needs mm_idx_t::S, and it is not folded in here.
- * ------------------------------------------------------------------------- */
+ * Returns 0 on success, -1 if cap is too small (*n_out = required count), -2 if
+ * the alignment lies entirely inside a novel-ALT gap. Outputs are written only
+ * on success. The emitted CIGAR has no zero-length or repeated adjacent ops,
+ * does not start or end with D/N, and contains a gap's deletion only when it is
+ * covered on both sides. Indels are not left-normalised here. */
 int mm_lift_cigar(const mm_lift_rec_t *rec, int32_t ctg_len,
                   int64_t rs, const uint32_t *cigar, int32_t n_cigar,
                   int32_t qs, int32_t qe, int rev,
                   int64_t *rs_out, int32_t *qs_out, int32_t *qe_out,
                   uint32_t *cigar_out, int32_t cap, int32_t *n_out);
 
-/* ---------------------------------------------------------------------------
- * Table construction.
- *
- * mm_lift_build(mi, fn_map, jct) fills mi->lift with one record per sequence.
- *
- *   - A sequence whose name does not parse as "<chrom>_contig_<pos>" gets
- *     base_rid = -1 (identity).
- *   - A contig whose chromosome prefix does not name a sequence in the index
- *     also gets base_rid = -1, and is counted as unresolved: it cannot be
- *     projected, so it is left alone rather than projected wrongly.
- *   - off_a = pos - jct.  jct (the length of block A = left flank + anchor
- *     base) comes from the sidecar's optional FOURTH column, per contig; only
- *     when that column is absent is the --lift-junction value used (with
- *     min(jct, pos) at a chromosome start).  A sidecar built from the
- *     generator's geometry (mkliftmap_all.py) always carries the column, so
- *     a different flank length needs no command-line knowledge.
- *   - ins_len/del_len come from the signed delta d = |ALT| - |REF|:
- *       d > 0 -> ins_len = d,  del_len = 0
- *       d < 0 -> ins_len = 0,  del_len = -d
- *     d is read from fn_map, a TSV with either two columns
- *     "<contig name>\t<d>" or three columns "<contig name>\t<ins_len>\t<del_len>"
- *     (plus the optional fourth column "<jct>", see above)
- *     (the three-column form is required for complex records where both
- *     |REF| > 1 and |ALT| > 1, which a single delta cannot express).  For a
- *     contig absent from the file, d is inferred as len-201 when that is >= 4
- *     (an insertion, since the generator requires |ALT| >= 5 and |REF| == 1);
- *     otherwise the contig is unresolved.  See the metadata audit above for
- *     why inference alone is not enough: every deletion contig needs the file.
- *
- * Returns the number of sequences with base_rid >= 0, or -1 on error.
- * Writes the unresolved count to *n_unresolved when that is non-NULL.
- * ------------------------------------------------------------------------- */
+/* Build mi->lift from contig names and the map file fn_map (TSV):
+ *   <name> <d>  or  <name> <ins_len> <del_len> [<jct> [<jct:ins:del;...>]]
+ * d = |ALT|-|REF|; the optional 4th column is the junction (default jct), the
+ * 5th lists further gaps ascending (at most MM_LIFT_MAX_GAPS in total). A
+ * contig absent from the file is an insertion of len-201 if that is >= 4.
+ * Sequences that do not parse, or name an unknown chromosome, or have invalid
+ * geometry, get base_rid = -1 (counted in *n_unresolved if non-NULL).
+ * Returns the number of projectable sequences, or -1 on error. */
 int mm_lift_build(mm_idx_t *mi, const char *fn_map, int32_t jct, int64_t *n_unresolved);
 
 void mm_lift_destroy(mm_lift_t *lt);
 
-/* ---------------------------------------------------------------------------
- * Project a whole candidate set in place.
- *
- * For every reg whose rid carries a projection record, rewrites rid, rs, re,
- * qs, qe and the CIGAR in r->p, and sets r->lifted.  Regs on base sequences
- * and regs whose projection fails are left exactly as they were, so the
- * function is safe to call unconditionally.
- *
- * Must be called BEFORE the locus rule and mapq (map.c: mmq_rule_and_mapq):
- * the rule "same locus = one hypothesis" compares exact projected coordinates
- * (mm_lift_same_locus), and after projection the name-based rule can no
- * longer tell a contig from a chromosome -- it reads r->lifted instead.
- * Scores (dp_score/dp_max) are coordinate-free and are not touched here, so
- * projecting first changes nothing about how the candidates were scored.
- *
- * Must be called BEFORE mm_pair() and before --mate-resolve, so that a read on
- * a contig and its mate on the chromosome can be judged a proper pair: before
- * projection they carry different rids and mm_pair() cannot relate them.
- *
- * After this, map.c calls mm_lift_refresh() (align.c) on every lifted reg:
- * the same indel left-shift the aligner applies to every alignment
- * (mm_fix_cigar) is run against the BASE sequence, and mlen/blen/n_ambi are
- * recounted so NM is an edit distance against the base.  Skipped only under
- * --lift-noshift (rollback).
- *
- * Records where the reg sat before projection in r->lift_rid / r->lift_rs
- * (emitted as lt:Z:<contig>,<pos1> in SAM).
- *
- * Returns the number of regs actually projected.
- * ------------------------------------------------------------------------- */
+/* Project all regs on contigs in place (rid, rs, re, qs, qe, CIGAR), setting
+ * r->lifted and r->lift_rid/r->lift_rs. Regs on base sequences, or whose
+ * projection fails, are left unchanged. Call before the mapq rule and
+ * mm_pair(). Returns the number of regs projected. */
 int mm_lift_regs(const mm_idx_t *mi, int n_regs, mm_reg1_t *regs);
 
-/* ---------------------------------------------------------------------------
- * "Same locus" test on two candidates AFTER projection.
- *
- * Two candidates are one hypothesis about where the read comes from iff they
- * lie on the same sequence, on the same strand, and at least one query base
- * is placed on the same reference base by both alignments -- i.e. the two
- * alignments share a diagonal (ref - query offset) on a common query
- * interval.  This is exact, symmetric (which of the two came from a contig
- * plays no part), and sign-sensitive: the neighbouring copy of a tandem
- * repeat is shifted by the period and shares no diagonal, so it stays a
- * competitor and mapq 0 there is the right answer.
- *
- * Works on r->p->cigar when present (block-exact), and on the end points
- * (single diagonal) when the alignment has no CIGAR.
- * Returns 1 if same locus, 0 otherwise.
- * ------------------------------------------------------------------------- */
+/* Return 1 if a and b (after projection) are on the same sequence and strand
+ * and share at least one (query, reference) base pair, i.e. a common diagonal;
+ * uses the CIGARs when present, otherwise the end points. */
 int mm_lift_same_locus(const mm_reg1_t *a, const mm_reg1_t *b);
 
 #ifdef __cplusplus

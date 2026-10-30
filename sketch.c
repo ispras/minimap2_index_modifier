@@ -7,6 +7,7 @@
 #include "mmpriv.h"
 
 #include "linked_vcf_list.h"
+#include "rmin.h"
 
 #include <htslib/hts.h>
 #include <htslib/vcf.h>
@@ -151,12 +152,12 @@ void mm_sketch(void *km, const char *str, int len, int w, int k, uint32_t rid, i
 		kv_push(mm128_t, km, *p, min);
 }
 
-static void process_vcf_record(bcf1_t *rec, bcf_hdr_t *hdr, mm_idx_t *mi, mm128_v *p) {
+static int process_vcf_record(bcf1_t *rec, bcf_hdr_t *hdr, mm_idx_t *mi, mm128_v *p) {
     // Duplicate the record
     bcf1_t *rec_tmp = bcf_dup(rec);
     if (!rec_tmp) {
         fprintf(stderr, "ERROR: Failed to duplicate VCF record\n");
-        return;
+        return -1;
     }
 
     // Allocate memory and copy REF allele
@@ -164,7 +165,7 @@ static void process_vcf_record(bcf1_t *rec, bcf_hdr_t *hdr, mm_idx_t *mi, mm128_
     if (!REF) {
         fprintf(stderr, "ERROR: Memory allocation failed for REF\n");
         bcf_destroy(rec_tmp);
-        return;
+        return -1;
     }
     strncpy(REF, rec->d.allele[0], strlen(rec->d.allele[0]));
     REF[strlen(rec->d.allele[0])] = '\0';
@@ -177,7 +178,7 @@ static void process_vcf_record(bcf1_t *rec, bcf_hdr_t *hdr, mm_idx_t *mi, mm128_
             fprintf(stderr, "ERROR: Memory allocation failed for ALT\n");
             free(REF);
             bcf_destroy(rec_tmp);
-            return;
+            return -1;
         }
         strncpy(ALT, rec->d.allele[1], strlen(rec->d.allele[1]));
         ALT[strlen(rec->d.allele[1])] = '\0';
@@ -186,11 +187,15 @@ static void process_vcf_record(bcf1_t *rec, bcf_hdr_t *hdr, mm_idx_t *mi, mm128_
         // If no ALT allele is present, skip this record
         free(REF);
         bcf_destroy(rec_tmp);
-        return;
+        return 0;
     }
 
     // Insert the record into the linked list for later processing
-    insertatbegin((unsigned long)rec_tmp->pos, rec_tmp, rec_tmp->rid, REF, ALT);
+    if (insertatbegin((unsigned long)rec_tmp->pos, rec_tmp, rec_tmp->rid, REF, ALT) < 0) {
+        free(REF); free(ALT); bcf_destroy(rec_tmp);
+        return -1;
+    }
+    return 0;
 }
 
 void read_vcf(mm_idx_t *mi, char *fname, mm128_v *p, char *contig_name) {
@@ -225,7 +230,6 @@ void read_vcf(mm_idx_t *mi, char *fname, mm128_v *p, char *contig_name) {
     // Create an iterator for the specified contig
     hts_itr_t *itr = tbx_itr_querys(idx, contig_name);
     if (!itr) {
-        //fprintf(stderr, "WARNING: No records found for contig %s in VCF file %s\n", contig_name, fname);
         tbx_destroy(idx);
         bcf_hdr_destroy(hdr);
         hts_close(fp);
@@ -297,16 +301,19 @@ int vcf_synced_contig(vcf_ctx_t *ctx, const char *contig, mm_idx_t *mi, mm128_v 
 
         /* Unpack only what is needed */
         bcf_unpack(rec, BCF_UN_STR); /* REF/ALT */
-        /* bcf_unpack(rec, BCF_UN_INFO); // enable only if INFO is required */
 
-        process_vcf_record(rec, ctx->hdr, mi, p);
+        if (process_vcf_record(rec, ctx->hdr, mi, p) < 0) {
+            deleteList();
+            return -1;
+        }
         ++n;
     }
 
     /* Flush any pending state to match the original contract */
     if (!isListEmpty()) {
-        handleGTList(mi, ctx->hdr, p);
+        int status = handleGTList(mi, ctx->hdr, p);
         deleteList();
+        if (status < 0) return -1;
     }
     return n;
 }
@@ -315,8 +322,8 @@ void vcf_close_synced(vcf_ctx_t *ctx) {
     if (ctx->sr) bcf_sr_destroy(ctx->sr);
 }
 
-void mm_idx_manipulate_phased(mm_idx_t * mi, char * fname, mm128_v *p, vcf_ctx_t * ctx, char * contig_name) {
-    vcf_synced_contig(ctx, contig_name, mi, p);
+int mm_idx_manipulate_phased(mm_idx_t * mi, char * fname, mm128_v *p, vcf_ctx_t * ctx, char * contig_name) {
+    return vcf_synced_contig(ctx, contig_name, mi, p);
 }
 
 //REF - REF (for control)
@@ -562,7 +569,7 @@ void add_variants(mm_idx_t * mi, const char * CHR, char ** REF_arr, char ** ALT_
         //add single SNP
         if ((strlen(REF_arr[i]) == 1) && (strlen(ALT_arr[i]) == 1)) {
             new_ref_seq[EXTRA_GAP + SIDE_SIZE + IN_CHUNK_POSITION +
-                        (POS_all[i] - snp_position)] = ALT_arr[i][0];// - 'A' + 'a';
+                        (POS_all[i] - snp_position)] = ALT_arr[i][0];
         } else {
             has_indel = i;
             indel_count++;
@@ -589,12 +596,30 @@ void add_variants(mm_idx_t * mi, const char * CHR, char ** REF_arr, char ** ALT_
     mm_sketch(0, &new_ref_seq[EXTRA_GAP + IN_CHUNK_POSITION], SIDE_SIZE * 2 + 1,
               mi->w, mi->k, 0, mi->flag & MM_I_HPC, &minimizer_array);
 
-    for (int i = 0; i < minimizer_array.n; i++) {
-        if (minimizer_array.a[i].y < SIDE_SIZE * 2) continue;
-        if (minimizer_array.a[i].y > (SIDE_SIZE + mi->k) * 2 - 1) continue;
-        minimizer_array.a[i].y = ((uint64_t)seq_num << 32) + (minimizer_array.a[i].y % 2) +
-                                  (snp_position - SIDE_SIZE - 1 + minimizer_array.a[i].y / 2) * 2;
+    if (!rmin_active()) { /* no read-minimizer filter */
+        for (int i = 0; i < minimizer_array.n; i++) {
+            if (minimizer_array.a[i].y < SIDE_SIZE * 2) continue;
+            if (minimizer_array.a[i].y > (SIDE_SIZE + mi->k) * 2 - 1) continue;
+            minimizer_array.a[i].y = ((uint64_t)seq_num << 32) + (minimizer_array.a[i].y % 2) +
+                                      (snp_position - SIDE_SIZE - 1 + minimizer_array.a[i].y / 2) * 2;
 
-        kv_push(mm128_t, 0, *p, minimizer_array.a[i]);
+            kv_push(mm128_t, 0, *p, minimizer_array.a[i]);
+        }
+    } else { /* rmin: same candidates in the same order, then filtered by read minimizers */
+        int n_c = 0;
+        mm128_t cand[64];
+        uint8_t keep[64];
+        for (int i = 0; i < minimizer_array.n; i++) {
+            if (minimizer_array.a[i].y < SIDE_SIZE * 2) continue;
+            if (minimizer_array.a[i].y > (SIDE_SIZE + mi->k) * 2 - 1) continue;
+            minimizer_array.a[i].y = ((uint64_t)seq_num << 32) + (minimizer_array.a[i].y % 2) +
+                                      (snp_position - SIDE_SIZE - 1 + minimizer_array.a[i].y / 2) * 2;
+            if (n_c >= 64) { fprintf(stderr, "[E::rmin] >64 candidates at %s:%lu\n", CHR, curr_pos); exit(1); }
+            cand[n_c++] = minimizer_array.a[i];
+        }
+        rmin_filter(cand, n_c, keep, CHR, curr_pos, REF_arr, ALT_arr, POS_all, N_SNP, mi->k);
+        for (int i = 0; i < n_c; i++)
+            if (keep[i]) kv_push(mm128_t, 0, *p, cand[i]);
     }
+    free(minimizer_array.a);
 }

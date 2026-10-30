@@ -112,13 +112,8 @@ mm_seed_t *mm_collect_matches(void *km, int *_n_m, int qlen, int max_occ, int ma
 				m[i].flt = 1;
 	}
 	if (mi->lift) {
-		/* --lift: the occurrence gate must not count augmentation contigs.  A
-		 * k-mer of a satellite/STR flank sits in every contig cut from that
-		 * repeat (hundreds of them), so its total count crosses max_occ while
-		 * its count on the base sequences does not; the seed was then dropped
-		 * for EVERY read carrying it, the primary chain lost seeds, and mapq
-		 * fell (chr21 slice: cm 15 -> 11, mapq 60 -> 48).  Re-count on base
-		 * sequences only, for seeds not hopelessly frequent (<= 8x max_occ). */
+		/* --lift: contigs cut from a repeat multiply a k-mer's occurrences;
+		 * re-count seeds up to 8x max_occ on base sequences only */
 		const mm_lift_t *lt = (const mm_lift_t*)mi->lift;
 		for (i = 0; i < n_m0; ++i) {
 			mm_seed_t *q = &m[i];

@@ -419,9 +419,7 @@ static void mm_set_inv_mapq(void *km, int n_regs, mm_reg1_t *regs)
 }
 
 int genome_and_contig_exist(char **arr) {
-	//
-	// the chromosome name pattern: chr[1..22] | chr[1..22]_*
-	//
+	// chromosome name pattern: chr[1..22] | chr[1..22]_*
 	fprintf(stderr, "debug: genome_and_contig_exist\n");
 
 	if (!arr) {
@@ -493,16 +491,12 @@ void mm_set_mapq2(void *km, int n_regs, mm_reg1_t *regs, int min_chain_sc, int m
 				if (is_sr && is_splice)
 					x = (float)r->p->dp_max2 / r->p->dp_max; // ignore chaining score; for short RNA-seq reads, unspliced chaining score tends to be higher
 				else if (r->lifted)
-					/* --lift: a contig candidate's chaining score is not comparable
-					 * with a chromosome candidate's (different sequence, different
-					 * minimizer sampling, and never part of a fragment chain), so the
-					 * chain-score ratio is dropped and only the DP ratio is used;
-					 * otherwise subsc/score0 > 1 turns a 28-point DP win into mapq 1. */
+					/* --lift: chaining scores of contig and chromosome candidates are
+					 * not comparable; use the DP ratio only */
 					x = (float)r->p->dp_max2 / r->p->dp_max;
 				else
 					x = (float)r->p->dp_max2 * subsc / r->p->dp_max / r->score0;
 				mapq = (int)(identity * pen_cm * q_coef * (1.0f - x * x) * logf((float)r->p->dp_max / match_sc));
-               	//	identity, pen_cm, x, r->p->dp_max, match_sc, mapq, r->n_sub);
 				if (!is_sr) {
 					int mapq_alt = (int)(6.02f * identity * identity * (r->p->dp_max - r->p->dp_max2) / match_sc + .499f); // BWA-MEM like mapQ, mostly for short reads
 					mapq = mapq < mapq_alt? mapq : mapq_alt; // in case the long-read heuristic fails

@@ -8,10 +8,14 @@
 #endif
 #include <fcntl.h>
 #include <stdio.h>
+#include <errno.h>
+#include <limits.h>
 #define __STDC_LIMIT_MACROS
 #include "kthread.h"
 #include "bseq.h"
 #include "minimap.h"
+#include "mm_varalt.h"
+#include "mm_hapdp.h"
 #include "mmpriv.h"
 #include "ksw2.h"
 #include "kvec.h"
@@ -22,6 +26,7 @@
 #include <htslib/tbx.h>
 #include <htslib/kstring.h>
 #include <htslib/kseq.h>
+#include "linked_vcf_list.h"
 
 #define idx_hash(a) ((a)>>1)
 #define idx_eq(a, b) ((a)>>1 == (b)>>1)
@@ -79,6 +84,8 @@ void mm_idx_destroy(mm_idx_t *mi)
 		}
 	}
 	if (mi->spsc) free(mi->spsc);
+	if (mi->varalt) mm_varalt_destroy(mi->varalt);
+	if (mi->hapdp) mm_hapdp_destroy(mi->hapdp);
 	if (mi->I) {
 		for (i = 0; i < mi->n_seq; ++i)
 			free(mi->I[i].a);
@@ -303,6 +310,8 @@ typedef struct {
 	mm_bseq_file_t *fp;
 	mm_idx_t *mi;
 	char * vcf_with_variants;
+	int error;
+	int vcf_threads;
 } pipeline_t;
 
 typedef struct {
@@ -378,21 +387,23 @@ static void *worker_pipeline(void *shared, int step, void *in)
         step_t *s = (step_t*)in;
 
 	    vcf_ctx_t ctx = {0}; /* must be zeroed: vcf_close_synced() below runs unconditionally */
-        if (p->vcf_with_variants && strcmp(p->vcf_with_variants, "") && vcf_open_synced(p->vcf_with_variants, 4, &ctx) != 0) {
+        if (!p->error && p->vcf_with_variants && strcmp(p->vcf_with_variants, "") && vcf_open_synced(p->vcf_with_variants, p->vcf_threads, &ctx) != 0) {
 	        fprintf(stderr, "ERROR: failed to open %s with index\n", p->vcf_with_variants);
-	        exit(1); /* was: return NULL -- the pipeline then wrote an index with 0 minimizers and exited 0 */
+	        p->error = EINVAL;
 	    }
 
 		for (i = 0; i < s->n_seq; ++i) {
 			if (mm_verbose >= 3) fprintf(stderr, "SEQ %d %s\n", s->n_seq, s->seq[i].name);
 			mm_bseq1_t *t = &s->seq[i];
+			if (p->error) { free(t->seq); free(t->name); continue; }
 			if (t->l_seq > 0)
 				mm_sketch(0, t->seq, t->l_seq, p->mi->w, p->mi->k, t->rid, p->mi->flag&MM_I_HPC, &s->a);
 			else if (mm_verbose >= 2)
 				fprintf(stderr, "[WARNING] the length database sequence '%s' is 0\n", t->name);
 
 			if(p->vcf_with_variants && strcmp(p->vcf_with_variants, "")) {
-				mm_idx_manipulate_phased(p->mi, p->vcf_with_variants, &s->a, &ctx, s->seq[i].name);
+				if (mm_idx_manipulate_phased(p->mi, p->vcf_with_variants, &s->a, &ctx, s->seq[i].name) < 0)
+					p->error = EINVAL;
 			}
 
 			free(t->seq); free(t->name);
@@ -400,12 +411,13 @@ static void *worker_pipeline(void *shared, int step, void *in)
 
 		free(s->seq); s->seq = 0;
         vcf_close_synced(&ctx);
+		if (p->error) s->a.n = 0;
+		if (!s->a.n) return s;
 
 		// sort by minimizer
 		radix_sort_128x(s->a.a, s->a.a + s->a.n);
 
-        // stay only unique
-		//#### why 16, sizeof(mm128_v)?
+        // keep unique minimizers only; 16 = sizeof(mm128_t)
         mm128_t *tmp = (mm128_t*)calloc(s->a.n, 16);
 
 
@@ -440,7 +452,6 @@ static void *worker_pipeline(void *shared, int step, void *in)
 
         tmp = (mm128_t *) realloc(tmp, sizeof(mm128_t) * end_tmp);
 
-		//#### do we need realloc s->a.a ?
         memcpy(s->a.a, tmp, end_tmp * 16);
         free(tmp);
         s->a.n = end_tmp;
@@ -458,14 +469,20 @@ mm_idx_t *mm_idx_gen(mm_bseq_file_t *fp, int w, int k, int b, int flag, int mini
 {
 	pipeline_t pl;
 	if (fp == 0 || mm_bseq_eof(fp)) return 0;
+	if ((flag & MM_PARSE_HT) && vcf_with_variants && *vcf_with_variants && mm_gt_validate_file(vcf_with_variants) < 0) {
+		errno = EINVAL;
+		return 0;
+	}
 	memset(&pl, 0, sizeof(pipeline_t));
 	pl.mini_batch_size = (uint64_t)mini_batch_size < batch_size? mini_batch_size : batch_size;
 	pl.batch_size = batch_size;
 	pl.fp = fp;
 	pl.mi = mm_idx_init(w, k, b, flag);
 	pl.vcf_with_variants = vcf_with_variants;
+	pl.vcf_threads = n_threads < 4 ? n_threads : 4;
 
 	kt_pipeline(n_threads < 3? n_threads : 3, worker_pipeline, &pl, 3);
+	if (pl.error) { mm_idx_destroy(pl.mi); errno = pl.error; return 0; }
 
 	if (mm_verbose >= 3)
 		fprintf(stderr, "[M::%s::%.3f*%.2f] collected minimizers\n", __func__, realtime() - mm_realtime0, cputime() / (realtime() - mm_realtime0));
@@ -628,90 +645,189 @@ void mm_idx_dump(FILE *fp, const mm_idx_t *mi)
 	fflush(fp);
 }
 
+static int mm_idx_txt_space(int c)
+{
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f';
+}
+
+static int mm_idx_txt_error(FILE *fp)
+{
+	errno = ferror(fp)? EIO : EINVAL;
+	return -1;
+}
+
+static int mm_idx_txt_uint(FILE *fp, uint64_t limit, uint64_t *out)
+{
+	uint64_t value = 0;
+	int c;
+	do { c = fgetc(fp); } while (mm_idx_txt_space(c));
+	if (c < '0' || c > '9') return mm_idx_txt_error(fp);
+	do {
+		unsigned digit = c - '0';
+		if (digit > limit || value > (limit - digit) / 10) return mm_idx_txt_error(fp);
+		value = value * 10 + digit;
+		c = fgetc(fp);
+	} while (c >= '0' && c <= '9');
+	if (c == EOF) {
+		if (ferror(fp)) return mm_idx_txt_error(fp);
+	} else {
+		if (!mm_idx_txt_space(c)) return mm_idx_txt_error(fp);
+		if (ungetc(c, fp) == EOF) { errno = EIO; return -1; }
+	}
+	*out = value;
+	return 0;
+}
+
+static int mm_idx_txt_eol(FILE *fp)
+{
+	int c;
+	do { c = fgetc(fp); } while (c == ' ' || c == '\t' || c == '\r');
+	return c == '\n'? 0 : mm_idx_txt_error(fp);
+}
+
 mm_idx_t *mm_idx_load_from_txt(FILE *fp)
 {
 	char magic[4];
 	uint32_t x[5], i;
-	uint64_t sum_len = 0;
-	mm_idx_t *mi;
+	uint64_t sum_len = 0, value;
+	mm_idx_t *mi = 0;
+	int c, saved_errno;
 
-    fscanf(fp, "%s\n", &magic);
-
-	if (strncmp(magic, MM_IDX_MAGIC, 4) != 0) return 0;
-    fscanf(fp, "%u %u %u %u %u\n", &x[0], &x[1], &x[2], &x[3], &x[4]);
-
+	errno = 0;
+	do { c = fgetc(fp); } while (mm_idx_txt_space(c));
+	if (c == EOF) { mm_idx_txt_error(fp); return 0; }
+	magic[0] = c;
+	if (fread(magic + 1, 1, 3, fp) != 3) { mm_idx_txt_error(fp); return 0; }
+	if (memcmp(magic, MM_IDX_MAGIC, 4) != 0) { errno = EINVAL; return 0; }
+	c = fgetc(fp);
+	if (!mm_idx_txt_space(c)) { mm_idx_txt_error(fp); return 0; }
+	for (i = 0; i < 5; ++i) {
+		if (mm_idx_txt_uint(fp, UINT32_MAX, &value) < 0) return 0;
+		x[i] = (uint32_t)value;
+	}
+	if (x[0] == 0 || x[0] > INT_MAX || x[1] == 0 || x[1] > INT_MAX / 2 ||
+		x[2] >= 31 || x[2] > x[1] * 2 || x[3] > SIZE_MAX / sizeof(mm_idx_seq_t)) {
+		errno = EINVAL;
+		return 0;
+	}
 	mi = mm_idx_init(x[0], x[1], x[2], x[4]);
+	if (mi == 0) { errno = ENOMEM; return 0; }
+	if (mi->B == 0) { errno = ENOMEM; goto fail; }
+	mi->seq = (mm_idx_seq_t*)kcalloc(mi->km, x[3], sizeof(mm_idx_seq_t));
+	if (x[3] && mi->seq == 0) { errno = ENOMEM; goto fail; }
 	mi->n_seq = x[3];
-	mi->seq = (mm_idx_seq_t*)kcalloc(mi->km, mi->n_seq, sizeof(mm_idx_seq_t));
 	for (i = 0; i < mi->n_seq; ++i) {
-		uint8_t l;
 		mm_idx_seq_t *s = &mi->seq[i];
-        fscanf(fp, "%u\n", &l);
-		if (l) {
-			s->name = (char*)kmalloc(mi->km, l + 1);
-            fscanf(fp, "%s\n", s->name);
-			s->name[l] = 0;
+		if (mm_idx_txt_uint(fp, UINT8_MAX, &value) < 0) goto fail;
+		if (value) {
+			size_t length = (size_t)value;
+			/* The writer emits the announced name on its own line, including spaces. */
+			if (mm_idx_txt_eol(fp) < 0) goto fail;
+			s->name = (char*)kmalloc(mi->km, length + 1);
+			if (s->name == 0) { errno = ENOMEM; goto fail; }
+			if (fread(s->name, 1, length, fp) != length) { mm_idx_txt_error(fp); goto fail; }
+			if (memchr(s->name, '\n', length) || memchr(s->name, '\0', length)) { errno = EINVAL; goto fail; }
+			s->name[length] = 0;
+			c = fgetc(fp);
+			if (c == '\r') c = fgetc(fp);
+			if (c != '\n') { mm_idx_txt_error(fp); goto fail; }
 		}
-        fscanf(fp, "%u\n", &s->len);
+		if (mm_idx_txt_uint(fp, UINT32_MAX, &value) < 0) goto fail;
+		s->len = (uint32_t)value;
 		s->offset = sum_len;
 		s->is_alt = 0;
 		sum_len += s->len;
 	}
-	for (i = 0; i < 1<<mi->b; ++i) {
+	for (i = 0; i < 1U<<mi->b; ++i) {
 		mm_idx_bucket_t *b = &mi->B[i];
 		uint32_t j, size;
-		khint_t k;
 		idxhash_t *h;
-        fscanf(fp, "%i\n", &b->n);
-		b->p = (uint64_t*)malloc(b->n * 8);
-        for (int j = 0; j < b->n; j++) {
-            fscanf(fp, "\t%lu\n", &b->p[j]);
-		}
-        fscanf(fp, "%u\n", &size);
+		if (mm_idx_txt_uint(fp, INT32_MAX, &value) < 0) goto fail;
+		if (value > SIZE_MAX / sizeof(uint64_t)) { errno = EINVAL; goto fail; }
+		b->n = (int32_t)value;
+		b->p = b->n? (uint64_t*)malloc((size_t)b->n * sizeof(uint64_t)) : 0;
+		if (b->n && b->p == 0) { errno = ENOMEM; goto fail; }
+		for (j = 0; j < (uint32_t)b->n; ++j)
+			if (mm_idx_txt_uint(fp, UINT64_MAX, &b->p[j]) < 0) goto fail;
+		if (mm_idx_txt_uint(fp, UINT32_MAX, &value) < 0) goto fail;
+		size = (uint32_t)value;
 		if (size == 0) continue;
 		b->h = h = kh_init(idx);
-		kh_resize(idx, h, size);
+		if (h == 0 || kh_resize(idx, h, size) < 0) { errno = ENOMEM; goto fail; }
 		for (j = 0; j < size; ++j) {
-			uint64_t x[2];
+			uint64_t key, val;
+			khint_t k;
 			int absent;
-            fscanf(fp, "%lu\t%lu\n", &x[0], &x[1]);
-			k = kh_put(idx, h, x[0], &absent);
-			assert(absent);
-			kh_val(h, k) = x[1];
+			if (mm_idx_txt_uint(fp, UINT64_MAX, &key) < 0 || mm_idx_txt_uint(fp, UINT64_MAX, &val) < 0) goto fail;
+			k = kh_put(idx, h, key, &absent);
+			if (absent < 0) { errno = ENOMEM; goto fail; }
+			if (absent == 0) { errno = EINVAL; goto fail; }
+			kh_val(h, k) = val;
 		}
 	}
 	if (!(mi->flag & MM_I_NO_SEQ)) {
-		mi->S = (uint32_t*)malloc((sum_len + 7) / 8 * 4);
-        for (int i = 0; i < (sum_len + 7) / 8; i++)
-            fscanf(fp, "%u\n", &mi->S[i]);
+		uint64_t j, words = (sum_len + 7) / 8;
+		if (words > SIZE_MAX / sizeof(uint32_t)) { errno = EINVAL; goto fail; }
+		mi->S = words? (uint32_t*)malloc((size_t)words * sizeof(uint32_t)) : 0;
+		if (words && mi->S == 0) { errno = ENOMEM; goto fail; }
+		for (j = 0; j < words; ++j) {
+			if (mm_idx_txt_uint(fp, UINT32_MAX, &value) < 0) goto fail;
+			mi->S[j] = (uint32_t)value;
+		}
 	}
 	return mi;
+
+fail:
+	saved_errno = errno;
+	mm_idx_destroy(mi);
+	errno = saved_errno;
+	return 0;
 }
 
+
+static int mm_idx_read_exact(FILE *fp, void *dst, size_t size, size_t count)
+{
+	if (count == 0 || fread(dst, size, count, fp) == count) return 0;
+	errno = ferror(fp)? EIO : EINVAL;
+	return -1;
+}
 
 mm_idx_t *mm_idx_load(FILE *fp)
 {
 	char magic[4];
 	uint32_t x[5], i;
 	uint64_t sum_len = 0;
-	mm_idx_t *mi;
+	mm_idx_t *mi = 0;
+	size_t n_magic;
+	int saved_errno;
 
-	if (fread(magic, 1, 4, fp) != 4) return 0;
-	if (strncmp(magic, MM_IDX_MAGIC, 4) != 0) return 0;
-	if (fread(x, 4, 5, fp) != 5) return 0;
+	errno = 0;
+	n_magic = fread(magic, 1, 4, fp);
+	if (n_magic == 0 && feof(fp) && !ferror(fp)) return 0; /* Clean EOF between parts. */
+	if (n_magic != 4) { errno = ferror(fp)? EIO : EINVAL; return 0; }
+	if (memcmp(magic, MM_IDX_MAGIC, 4) != 0) { errno = EINVAL; return 0; }
+	if (mm_idx_read_exact(fp, x, 4, 5) < 0) return 0;
+	if (x[0] == 0 || x[0] > INT_MAX || x[1] == 0 || x[1] > INT_MAX / 2 || x[2] >= 31) {
+		errno = EINVAL;
+		return 0;
+	}
 	mi = mm_idx_init(x[0], x[1], x[2], x[4]);
+	if (mi == 0) { errno = ENOMEM; return 0; }
+	if (mi->B == 0) { errno = ENOMEM; goto fail; }
+	mi->seq = (mm_idx_seq_t*)kcalloc(mi->km, x[3], sizeof(mm_idx_seq_t));
+	if (x[3] && mi->seq == 0) { errno = ENOMEM; goto fail; }
 	mi->n_seq = x[3];
-	mi->seq = (mm_idx_seq_t*)kcalloc(mi->km, mi->n_seq, sizeof(mm_idx_seq_t));
 	for (i = 0; i < mi->n_seq; ++i) {
 		uint8_t l;
 		mm_idx_seq_t *s = &mi->seq[i];
-		fread(&l, 1, 1, fp);
+		if (mm_idx_read_exact(fp, &l, 1, 1) < 0) goto fail;
 		if (l) {
 			s->name = (char*)kmalloc(mi->km, l + 1);
-			fread(s->name, 1, l, fp);
+			if (s->name == 0) { errno = ENOMEM; goto fail; }
+			if (mm_idx_read_exact(fp, s->name, 1, l) < 0) goto fail;
 			s->name[l] = 0;
 		}
-		fread(&s->len, 4, 1, fp);
+		if (mm_idx_read_exact(fp, &s->len, 4, 1) < 0) goto fail;
 		s->offset = sum_len;
 		s->is_alt = 0;
 		sum_len += s->len;
@@ -721,27 +837,39 @@ mm_idx_t *mm_idx_load(FILE *fp)
 		uint32_t j, size;
 		khint_t k;
 		idxhash_t *h;
-		fread(&b->n, 4, 1, fp);
-		b->p = (uint64_t*)malloc(b->n * 8);
-		fread(b->p, 8, b->n, fp);
-		fread(&size, 4, 1, fp);
+		if (mm_idx_read_exact(fp, &b->n, 4, 1) < 0) goto fail;
+		if (b->n < 0 || (uint64_t)b->n > SIZE_MAX / sizeof(uint64_t)) { errno = EINVAL; goto fail; }
+		b->p = b->n? (uint64_t*)malloc((size_t)b->n * sizeof(uint64_t)) : 0;
+		if (b->n && b->p == 0) { errno = ENOMEM; goto fail; }
+		if (mm_idx_read_exact(fp, b->p, 8, b->n) < 0) goto fail;
+		if (mm_idx_read_exact(fp, &size, 4, 1) < 0) goto fail;
 		if (size == 0) continue;
 		b->h = h = kh_init(idx);
-		kh_resize(idx, h, size);
+		if (h == 0 || kh_resize(idx, h, size) < 0) { errno = ENOMEM; goto fail; }
 		for (j = 0; j < size; ++j) {
 			uint64_t x[2];
 			int absent;
-			fread(x, 8, 2, fp);
+			if (mm_idx_read_exact(fp, x, 8, 2) < 0) goto fail;
 			k = kh_put(idx, h, x[0], &absent);
-			assert(absent);
+			if (absent < 0) { errno = ENOMEM; goto fail; }
+			if (absent == 0) { errno = EINVAL; goto fail; }
 			kh_val(h, k) = x[1];
 		}
 	}
 	if (!(mi->flag & MM_I_NO_SEQ)) {
-		mi->S = (uint32_t*)malloc((sum_len + 7) / 8 * 4);
-		fread(mi->S, 4, (sum_len + 7) / 8, fp);
+		uint64_t words = (sum_len + 7) / 8;
+		if (words > SIZE_MAX / sizeof(uint32_t)) { errno = EINVAL; goto fail; }
+		mi->S = words? (uint32_t*)malloc((size_t)words * sizeof(uint32_t)) : 0;
+		if (words && mi->S == 0) { errno = ENOMEM; goto fail; }
+		if (mm_idx_read_exact(fp, mi->S, 4, (size_t)words) < 0) goto fail;
 	}
 	return mi;
+
+fail:
+	saved_errno = errno;
+	mm_idx_destroy(mi);
+	errno = saved_errno;
+	return 0;
 }
 
 int64_t mm_idx_is_idx(const char *fn)
@@ -775,11 +903,13 @@ mm_idx_reader_t *mm_idx_reader_open(const char *fn, const mm_idxopt_t *opt, cons
 	is_idx = mm_idx_is_idx(fn);
 	if (is_idx < 0) return 0; // failed to open the index
 	r = (mm_idx_reader_t*)calloc(1, sizeof(mm_idx_reader_t));
+	if (r == 0) return 0;
 	r->is_idx = is_idx;
 	if (opt) r->opt = *opt;
 	else mm_idxopt_init(&r->opt);
 	if (r->is_idx) {
 		r->fp.idx = fopen(fn, "rb");
+		if (r->fp.idx == 0) { free(r); return 0; }
 		r->idx_size = is_idx;
 	} else r->fp.seq = mm_bseq_open(fn);
 	if (fn_out) r->fp_out = fopen(fn_out, "wb");
@@ -797,13 +927,17 @@ void mm_idx_reader_close(mm_idx_reader_t *r)
 mm_idx_t *mm_idx_reader_read(mm_idx_reader_t *r, int n_threads, char * vcf_with_variants)
 {
 	mm_idx_t *mi;
+	if (r->error) return 0;
 	if (r->is_idx) {
 		mi = mm_idx_load(r->fp.idx);
+		if (mi == 0 && errno) r->error = errno;
 		if (mi && mm_verbose >= 2 && (mi->k != r->opt.k || mi->w != r->opt.w || (mi->flag&MM_I_HPC) != (r->opt.flag&MM_I_HPC)))
 			fprintf(stderr, "[WARNING]\033[1;31m Indexing parameters (-k, -w or -H) overridden by parameters used in the prebuilt index.\033[0m\n");
 	} else
 	{
+		errno = 0;
 		mi = mm_idx_gen(r->fp.seq, r->opt.w, r->opt.k, r->opt.bucket_bits, r->opt.flag, r->opt.mini_batch_size, n_threads, r->opt.batch_size, vcf_with_variants);
+		if (!mi && errno) r->error = errno;
 	}
 	if (mi) {
 		if (r->fp_out) {

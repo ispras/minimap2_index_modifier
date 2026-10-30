@@ -2,7 +2,7 @@ CFLAGS=		-g -Wall -O2 -Wc++-compat #-fsanitize=address #-Wextra
 CPPFLAGS=	-DHAVE_KALLOC
 INCLUDES=
 OBJS=		kthread.o kalloc.o misc.o bseq.o sketch.o sdust.o options.o index.o \
-			lchain.o align.o hit.o seed.o jump.o linked_vcf_list.o map.o mm_lift.o mm_lift_idx.o format.o pe.o esterr.o splitidx.o \
+			lchain.o align.o hit.o seed.o jump.o linked_vcf_list.o map.o mm_lift.o mm_lift_idx.o mm_varalt.o mm_hapdp.o rmin.o format.o pe.o esterr.o splitidx.o \
 			ksw2_ll_sse.o
 PROG=		minimap2
 PROG_EXTRA=	sdust minimap2-lite
@@ -50,6 +50,9 @@ extra:all $(PROG_EXTRA)
 
 minimap2:main.o libminimap2.a
 		$(CC) $(CFLAGS) main.o -o $@ -L. -lminimap2 $(LIBS)
+
+rmin_count:rmin_count.o libminimap2.a
+		$(CC) $(CFLAGS) rmin_count.o -o $@ -L. -lminimap2 $(LIBS)
 
 minimap2-lite:example.o libminimap2.a
 		$(CC) $(CFLAGS) $< -o $@ -L. -lminimap2 $(LIBS)
@@ -109,7 +112,8 @@ depend:
 
 # DO NOT DELETE
 
-align.o: minimap.h mmpriv.h bseq.h kseq.h ksw2.h kalloc.h
+align.o: minimap.h mmpriv.h bseq.h kseq.h ksw2.h kalloc.h mm_hapdp.h
+mm_hapdp.o: mm_hapdp.h minimap.h mmpriv.h kalloc.h
 bseq.o: bseq.h kvec.h kalloc.h kseq.h
 esterr.o: mmpriv.h minimap.h bseq.h kseq.h
 example.o: minimap.h kseq.h
@@ -138,3 +142,8 @@ seed.o: mmpriv.h minimap.h bseq.h kseq.h kalloc.h ksort.h
 linked_vcf_list.o: mmpriv.h minimap.h linked_vcf_list.h
 sketch.o: kvec.h kalloc.h mmpriv.h minimap.h bseq.h kseq.h linked_vcf_list.h
 splitidx.o: mmpriv.h minimap.h bseq.h kseq.h
+rmin.o: rmin.h minimap.h khash.h
+rmin_count.o: rmin.h bseq.h minimap.h mmpriv.h kvec.h ketopt.h
+sketch.o: rmin.h
+linked_vcf_list.o: rmin.h
+main.o: rmin.h

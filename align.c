@@ -5,6 +5,7 @@
 #include "minimap.h"
 #include "mmpriv.h"
 #include "mm_lift.h"
+#include "mm_hapdp.h"
 #include "ksw2.h"
 
 #define MM_MAX_QLEN_FLANK 100
@@ -831,6 +832,12 @@ static void mm_align1(void *km, const mm_mapopt_t *opt, const mm_idx_t *mi, int 
 				}
 				if (ez->score > max_gapped_score)
 					ez->cigar = ksw_push_cigar(km, &ez->n_cigar, &ez->m_cigar, ez->cigar, MM_CIGAR_MATCH, qe - qs);
+				else if (mi->hapdp && !(opt->flag & MM_F_QSTRAND) && mm_hapdp_ungapped_best(km, mi->hapdp, opt, rid, rs, qe - qs, qseq, tseq, ez->score) > max_gapped_score) {
+					/* --hap-dp: decide ungapped on the best haplotype string; ez->score stays the base score
+					 * (the string's gain is added by mm_hapdp_rescore() below) */
+					ez->cigar = ksw_push_cigar(km, &ez->n_cigar, &ez->m_cigar, ez->cigar, MM_CIGAR_MATCH, qe - qs);
+					mm_hapdp_count_mid_flip();
+				}
 				else
 					mm_align_pair(km, opt, qe - qs, qseq, re - rs, tseq, junc, mat, bw1, -1, opt->zdrop, ksw_flag|KSW_EZ_APPROX_MAX, ez);
 			} else { // perform normal gapped alignment
@@ -905,6 +912,8 @@ static void mm_align1(void *km, const mm_mapopt_t *opt, const mm_idx_t *mi, int 
 			qseq = &qseq0[r->rev][qs1];
 		}
 		mm_update_extra(r, qseq, tseq, mat, opt->q, opt->e, opt->flag & MM_F_EQX, !(is_sr || is_sr_rna));
+		if (mi->hapdp && !(opt->flag & MM_F_QSTRAND)) /* --hap-dp: best haplotype string over the final alignment */
+			mm_hapdp_rescore(km, mi, opt, mat, !(is_sr || is_sr_rna), &qseq0[r->rev][r->rev? qlen - r->qe : r->qs], r);
 		if (rev && r->p->trans_strand)
 			r->p->trans_strand ^= 3; // flip to the read strand
 	}
@@ -1046,21 +1055,10 @@ void mm_update_dp_max(int qlen, int n_regs, mm_reg1_t *regs, float frac, int a, 
 	}
 }
 
-/* After --lift has projected a contig placement onto the base reference, make
- * the record look exactly as if the aligner had produced it there: run the
- * same indel left-shift (mm_fix_cigar) against the BASE sequence and recount
- * mlen/blen/n_ambi so NM is an edit distance against the base, not the
- * contig.  The junction D/I emitted by mm_lift_cigar() is left-shifted like
- * any other gap, which is what makes a contig-placed read and a base-placed
- * read of the same allele agree on where the indel is (DESIGN.md class C3).
- * dp_score/dp_max are NOT touched: they are the score of the ALT hypothesis,
- * scored against the allele the read actually carries (DESIGN.md §4). */
-/* what & 1: run mm_fix_cigar (indel left-shift, leading I/D) against the base;
- * what & 2: recount mlen/blen/n_ambi against the base (NM).  The two are split
- * because mapq uses identity = mlen/blen and must see the CONTIG identity (the
- * ALT hypothesis the read actually matches), not the base identity in which
- * the junction indel counts as non-identity; NM in the output must be the edit
- * distance against the base. */
+/* Normalize a record projected from a contig onto the base reference, as if aligned there.
+ * what & 1: run mm_fix_cigar (indel left-shift, leading I/D) against the base;
+ * what & 2: recount mlen/blen/n_ambi against the base (NM).  Split because mapq must
+ * use the contig identity, while NM is against the base.  dp_score/dp_max are kept. */
 void mm_lift_refresh(const mm_idx_t *mi, int qlen, const char *qstr, mm_reg1_t *r, int what)
 {
 	extern unsigned char seq_nt4_table[256];
@@ -1075,9 +1073,8 @@ void mm_lift_refresh(const mm_idx_t *mi, int qlen, const char *qstr, mm_reg1_t *
 	qbuf = (uint8_t*)malloc((size_t)l_q + (size_t)l_t);
 	if (qbuf == NULL) return;
 	tseq = qbuf + l_q;
-	/* query in alignment orientation: for a reverse hit the aligned strand is
-	 * the reverse complement and r->qs/qe are forward-read coordinates
-	 * (align.c:894-895), so the aligned interval starts at qlen - qe */
+	/* query in alignment orientation: r->qs/qe are forward-read coordinates,
+	 * so for a reverse hit the aligned interval starts at qlen - qe */
 	if (!r->rev) {
 		for (i = 0; i < l_q; ++i) qbuf[i] = seq_nt4_table[(uint8_t)qstr[r->qs + i]];
 	} else {
@@ -1122,30 +1119,13 @@ void mm_lift_refresh(const mm_idx_t *mi, int qlen, const char *qstr, mm_reg1_t *
 	free(qbuf);
 }
 
-/* --lift-realign.  The projection says WHERE the read belongs; how the read's
- * bases align there is re-derived from the read itself against the base, in
- * two parts, the way mm_align1() builds every short-read alignment:
- *
- *  1. MIDDLE (mm_lift_realign_mid): between the first and the last exact-match
- *     anchor (runs of >= MM_LIFT_MIN_ANCHOR identical bases) of the projected
- *     alignment, the CIGAR is re-derived by GLOBAL DP against the base with
- *     both ends fixed on the anchors.  Global, not fitting: a long panel
- *     deletion between the anchors must be crossed in full, so the DP cannot
- *     trade it for a cheaper clip or a run of insertions (that was v3's
- *     failure on EDGEX: 10I77D became 2I2M20I2M).  A read whose allele differs
- *     from the panel (I8 in a tandem where the contig carries I12, projected
- *     as I12+D4) thus gets its own I8; a read that carries the panel allele
- *     gets the same indel back.  The new middle replaces the projected one
- *     iff its standard score against the base is not lower; an indel wider
- *     than the band keeps the projection.  Outside the anchors the projected
- *     ops are kept: there the read has no exact support, and the projection
- *     (the contig's evidence) is all there is.
- *  2. ENDS (mm_lift_extend_ends, the former v2): a clipped end (the read ran
- *     past the contig's 100 bp flank) is extended against the base with the
- *     same extension DP (end_bonus, zdrop, band).
- *
- * dp_score / dp_max stay as scored (the ALT hypothesis).  Returns a bit mask:
- * 1 = middle replaced, 2 = an end extended. */
+/* --lift-realign: re-derive the projected alignment against the base.
+ *  1. middle (mm_lift_realign_mid): between the first and the last exact-match anchor
+ *     (>= MM_LIFT_MIN_ANCHOR bases), global DP against the base with both ends fixed;
+ *     ops outside the anchors are kept; an indel wider than the band keeps the projection.
+ *  2. ends (mm_lift_extend_ends): a clipped end is extended against the base with the
+ *     usual extension DP.
+ * dp_score/dp_max are kept.  Returns a bit mask: 1 = middle replaced, 2 = an end extended. */
 static int32_t mm_lift_cigar_score(const mm_mapopt_t *opt, const uint32_t *cigar, int32_t n_cigar, const uint8_t *q, const uint8_t *t)
 {
 	int32_t s = 0, qo = 0, to = 0, amb = opt->sc_ambi > 0? -opt->sc_ambi : opt->sc_ambi, k;
@@ -1168,6 +1148,21 @@ static int32_t mm_lift_cigar_score(const mm_mapopt_t *opt, const uint32_t *cigar
 }
 
 #define MM_LIFT_MIN_ANCHOR 15   /* shortest exact run that may anchor the middle re-derivation */
+
+/* true when two CIGARs carry the same multiset of gap operations (op, length), i.e. only
+ * the placement of the indels differs */
+static int mm_lift_same_gaps(const uint32_t *a, int32_t na, const uint32_t *b, int32_t nb)
+{
+	uint32_t ga[64], gb[64];
+	int32_t i, ka = 0, kb = 0, j;
+	for (i = 0; i < na; ++i) { int op = a[i]&0xf; if (op == MM_CIGAR_INS || op == MM_CIGAR_DEL) { if (ka == 64) return 0; ga[ka++] = a[i]; } }
+	for (i = 0; i < nb; ++i) { int op = b[i]&0xf; if (op == MM_CIGAR_INS || op == MM_CIGAR_DEL) { if (kb == 64) return 0; gb[kb++] = b[i]; } }
+	if (ka != kb) return 0;
+	for (i = 1; i < ka; ++i) { uint32_t t = ga[i]; for (j = i - 1; j >= 0 && ga[j] > t; --j) ga[j+1] = ga[j]; ga[j+1] = t; }
+	for (i = 1; i < kb; ++i) { uint32_t t = gb[i]; for (j = i - 1; j >= 0 && gb[j] > t; --j) gb[j+1] = gb[j]; gb[j+1] = t; }
+	for (i = 0; i < ka; ++i) if (ga[i] != gb[i]) return 0;
+	return 1;
+}
 
 static int mm_lift_realign_mid(void *km, const mm_mapopt_t *opt, const mm_idx_t *mi, int qlen, const char *qstr, mm_reg1_t *r)
 {
@@ -1256,17 +1251,13 @@ static int mm_lift_realign_mid(void *km, const mm_mapopt_t *opt, const mm_idx_t 
 		for (k = 0; k < (uint32_t)ez.n_cigar; ++k) fprintf(stderr, "%d%c", ez.cigar[k]>>4, MM_CIGAR_STR[ez.cigar[k]&0xf]);
 		fprintf(stderr, "\n");
 	}
-	/* Representation consistency (25.09, L1re2 vs L1re by locus): a re-derived middle that beats
-	 * the projection by less than one substitution is an equally plausible placement of the same
-	 * indel (a tandem where one read's errors favour the next unit).  Taking it splits the reads
-	 * of a locus between two representations and DeepVariant halves the allele fraction (chr1:
-	 * 209624880, I8: 17 reads at the junction -> 13 + 4 shifted by 29 bp, 1/1 -> 0/1).  So the
-	 * projection -- the panel's representation, shared by every lifted read of the locus -- is
-	 * kept unless the read contradicts it by more than opt->lift_realign_margin (default a*2+b,
-	 * one substitution): a foreign allele (I8 vs panel I12: 28 points) or a deletion the read
-	 * does not carry (>= 20 points) still replaces it. */
+	/* Keep the panel's representation shared by all lifted reads of a locus: a re-derived middle
+	 * that only shifts the same indels must beat the projection by at least
+	 * opt->lift_realign_margin (default a*2+b); one that changes the indel content replaces it
+	 * on any score gain. */
 	{
 		int32_t margin = opt->lift_realign_margin >= 0 ? opt->lift_realign_margin : opt->a * 2 + opt->b;
+		if (!mm_lift_same_gaps(mid, n_mid, ez.cigar, ez.n_cigar)) margin = 1;
 		if (sc_new < sc_old + margin) goto done;
 	}
 	if (ez.n_cigar == n_mid && memcmp(ez.cigar, mid, (size_t)n_mid * 4) == 0) goto done;

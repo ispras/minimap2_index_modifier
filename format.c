@@ -125,9 +125,7 @@ int mm_write_sam_hdr(const mm_idx_t *idx, const char *rg, const char *ver, int a
 		const mm_lift_t *lt = (const mm_lift_t*)idx->lift;
 		uint32_t i;
 		for (i = 0; i < idx->n_seq; ++i) {
-			/* when projecting, contigs never appear in the output, so they
-			 * must not appear in the header either -- a BAM naming an absent
-			 * @SQ is invalid. */
+			/* when projecting, contigs are not written to @SQ */
 			if (lt && (int32_t)i < lt->n && lt->a[i].base_rid >= 0) continue;
 			mm_sprintf_lite(&str, "@SQ\tSN:%s\tLN:%d\n", idx->seq[i].name, idx->seq[i].len);
 		}
@@ -488,6 +486,14 @@ static inline const mm_reg1_t *get_sam_pri(int n_regs, const mm_reg1_t *regs)
 	return NULL;
 }
 
+/* A selected candidate may remain inside novel contig sequence after lift.
+ * Keep selection unchanged, but never serialize a reference absent from @SQ. */
+static int sam_unprojectable(const mm_idx_t *mi, const mm_reg1_t *r)
+{
+	const mm_lift_t *lt = (const mm_lift_t*)mi->lift;
+	return r && lt && r->rid >= 0 && r->rid < lt->n && lt->a[r->rid].base_rid >= 0;
+}
+
 static void write_sam_cigar(kstring_t *s, int sam_flag, int in_tag, int qlen, const mm_reg1_t *r, int64_t opt_flag)
 {
 	if (r->p == 0) {
@@ -523,6 +529,8 @@ void mm_write_sam3(kstring_t *s, const mm_idx_t *mi, const mm_bseq1_t *t, int se
 	int this_rid = -1, this_pos = -1;
 	const mm_reg1_t *regs = regss[seg_idx], *r_prev = NULL, *r_next;
 	const mm_reg1_t *r = n_regs > 0 && reg_idx < n_regs && reg_idx >= 0? &regs[reg_idx] : NULL;
+	const mm_reg1_t *unprojectable = sam_unprojectable(mi, r)? r : NULL;
+	int next_unprojectable;
 
 	// find the primary of the previous and the next segments, if they are mapped
 	if (n_seg > 1) {
@@ -538,6 +546,10 @@ void mm_write_sam3(kstring_t *s, const mm_idx_t *mi, const mm_bseq1_t *t, int se
 			}
 		} else r_prev = r_next;
 	} else r_prev = r_next = NULL;
+	next_unprojectable = sam_unprojectable(mi, r_next);
+	if (next_unprojectable) r_next = NULL;
+	if (sam_unprojectable(mi, r_prev)) r_prev = NULL;
+	if (unprojectable) r = NULL;
 
 	// write QNAME
 	s->l = 0;
@@ -548,13 +560,15 @@ void mm_write_sam3(kstring_t *s, const mm_idx_t *mi, const mm_bseq1_t *t, int se
 	flag = n_seg > 1? 0x1 : 0x0;
 	if (r == 0) {
 		flag |= 0x4;
+		if (unprojectable && unprojectable->parent != unprojectable->id) flag |= 0x100;
+		else if (unprojectable && !unprojectable->sam_pri) flag |= 0x800;
 	} else {
 		if (r->rev) flag |= 0x10;
 		if (r->parent != r->id) flag |= 0x100;
 		else if (!r->sam_pri) flag |= 0x800;
 	}
 	if (n_seg > 1) {
-		if (r && r->proper_frag) flag |= 0x2; // TODO: this doesn't work when there are more than 2 segments
+		if (r && r_next && r->proper_frag) flag |= 0x2; // TODO: this doesn't work when there are more than 2 segments
 		if (seg_idx == 0) flag |= 0x40;
 		else if (seg_idx == n_seg - 1) flag |= 0x80;
 		if (r_next == NULL) flag |= 0x8;
@@ -564,7 +578,7 @@ void mm_write_sam3(kstring_t *s, const mm_idx_t *mi, const mm_bseq1_t *t, int se
 
 	// write coordinate, MAPQ and CIGAR
 	if (r == 0) {
-		if (r_prev) {
+		if (r_prev && !unprojectable) {
 			this_rid = r_prev->rid, this_pos = r_prev->rs;
 			mm_sprintf_lite(s, "\t%s\t%d\t0\t*", mi->seq[this_rid].name, this_pos+1);
 		} else mm_sprintf_lite(s, "\t*\t0\t0\t*");
@@ -602,7 +616,7 @@ void mm_write_sam3(kstring_t *s, const mm_idx_t *mi, const mm_bseq1_t *t, int se
 			mm_sprintf_lite(s, "%d\t", r_next->rs + 1);
 		} else if (r_next) { // && this_rid < 0
 			mm_sprintf_lite(s, "\t%s\t%d\t", mi->seq[r_next->rid].name, r_next->rs + 1);
-		} else if (this_rid >= 0) { // && r_next == NULL
+		} else if (this_rid >= 0 && !next_unprojectable) { // && r_next == NULL
 			mm_sprintf_lite(s, "\t=\t%d\t", this_pos + 1); // next segment will take r's coordinate
 		} else mm_sprintf_lite(s, "\t*\t0\t"); // neither has coordinates
 		if (tlen > 0) ++tlen;
@@ -635,23 +649,31 @@ void mm_write_sam3(kstring_t *s, const mm_idx_t *mi, const mm_bseq1_t *t, int se
 	// write tags
 	if (mm_rg_id[0]) mm_sprintf_lite(s, "\tRG:Z:%s", mm_rg_id);
 	if (n_seg > 2) mm_sprintf_lite(s, "\tFI:i:%d", seg_idx);
+	if (unprojectable) {
+		/* origin only, not a placement; SEQ/QUAL are in read orientation */
+		mm_sprintf_lite(s, "\tlu:Z:unprojectable_contig\tlo:Z:%s,%d,%c,",
+			mi->seq[unprojectable->rid].name, unprojectable->rs + 1, "+-"[unprojectable->rev]);
+		write_sam_cigar(s, 0, 0, t->l_seq, unprojectable, opt_flag);
+	}
 	if (r) {
 		write_tags(s, r);
 		if (r->lifted) mm_sprintf_lite(s, "\tlt:Z:%s,%d", mi->seq[r->lift_rid].name, r->lift_rs + 1); // where it sat before --lift projected it
 		if (r->pe_ambig) mm_sprintf_lite(s, "\tpa:i:1"); // both ends ambiguous: --mate-resolve could not settle the pair
 		if (r->tie_base) mm_sprintf_lite(s, "\ttb:i:1"); // --lift-tie-base fired: contig candidates dropped, placed as on the plain reference
 		if (r->mate_ncand > 1) mm_sprintf_lite(s, "\tmr:i:%d", r->mate_ncand); // --mate-resolve picked the nearest of N compatible candidates
+		if (mi->varalt && r->va > 0) mm_sprintf_lite(s, "\tva:i:%d", r->va); // --var-alt: mismatches scored as matches (read base = known panel ALT)
+		if (mi->hapdp && r->hd > 0) mm_sprintf_lite(s, "\thd:i:%d", r->hd); // --hap-dp: ALT positions of the chosen haplotype string matched by the read
 		if (r->parent == r->id && r->p && n_regs > 1 && regs && r >= regs && r - regs < n_regs) { // supplementary aln may exist
 			int i, n_sa = 0; // n_sa: number of SA fields
 			for (i = 0; i < n_regs; ++i)
-				if (i != r - regs && regs[i].parent == regs[i].id && regs[i].p)
+				if (i != r - regs && regs[i].parent == regs[i].id && regs[i].p && !sam_unprojectable(mi, &regs[i]))
 					++n_sa;
 			if (n_sa > 0) {
 				mm_sprintf_lite(s, "\tSA:Z:");
 				for (i = 0; i < n_regs; ++i) {
 					const mm_reg1_t *q = &regs[i];
 					int l_M, l_I = 0, l_D = 0, clip5 = 0, clip3 = 0;
-					if (r == q || q->parent != q->id || q->p == 0) continue;
+					if (r == q || q->parent != q->id || q->p == 0 || sam_unprojectable(mi, q)) continue;
 					if (q->qe - q->qs < q->re - q->rs) l_M = q->qe - q->qs, l_D = (q->re - q->rs) - l_M;
 					else l_M = q->re - q->rs, l_I = (q->qe - q->qs) - l_M;
 					clip5 = q->rev? t->l_seq - q->qe : q->qs;
