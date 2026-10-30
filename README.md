@@ -33,7 +33,7 @@ minimap2 -ax sr -t 32 --lift --lift-map aug.liftmap --mapq-quotient --mate-resol
 Prebuilt indexes (population panel and HG003-specific) are available at
 https://nextcloud.ispras.ru/index.php/s/yCPnmP2TjbFwQBt.
 
-Docker image: [`egorguga/minimap2-augmented:main`](https://hub.docker.com/r/egorguga/minimap2-augmented).
+Docker image of this branch (with leviosam2 and bamfix): [`egorguga/minimap2-augmented:hap1-backbone`](https://hub.docker.com/r/egorguga/minimap2-augmented).
 
 The code of the previous paper (SNVs in the minimap2 index, BMC Bioinformatics 2024)
 is on branch `bmc-2024`.
@@ -54,6 +54,10 @@ Where the added code is (relative to minimap2 2.30):
 - `main.c`, `options.c`, `minimap.h`, `mmpriv.h`, `Makefile`: options and build.
 - `test/test_mm_lift.c`: unit tests of the projection.
 - `tools/`, `misc/supported_windows/`, `Dockerfile`: see above.
+- `tools/legacy_augmentation/`: hap1 reference with hap2 indel contexts, chain,
+  SNV VCF with the SYN carrier, liftmap and hap-DP (`build.py hap2-long`).
+- `tools/legacy_alignment/convert.sh`: hap1 BAM to GRCh38 with levioSAM2 lift,
+  `bamfix.c`, mate completion (`collx.sh`), remap of deferred pairs, reconcile, markdup.
 
 ---
 
